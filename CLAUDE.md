@@ -8,7 +8,7 @@ Giftwrap is a container wrapper tool that seamlessly integrates containerized bu
 
 This is a Rust implementation inspired by the Python script at `inspiration/docker-runner.py`. The design is documented in `DESIGN.md`.
 
-**Current Status**: Early development - Rust project not yet initialized. The Python inspiration script uses Docker, but the Rust implementation has not yet selected a container runtime.
+**Current Status**: Early development - Rust project not yet initialized. The Rust implementation uses **Podman** as the container runtime (Podman only - no other runtimes supported).
 
 ## Build Commands
 
@@ -51,7 +51,7 @@ src/
 ├── main.rs              # CLI argument parsing and orchestration
 ├── config/              # Configuration file parsing and environment variable overrides
 ├── build_context/       # SHA computation for build context versioning
-├── runtime/             # Container runtime abstraction (trait-based)
+├── podman/              # Podman command generation and execution
 ├── terminal/            # TTY detection and terminfo handling
 ├── bootstrap/           # Bootstrap code generation for containers
 └── git.rs               # Git directory detection for worktrees/submodules
@@ -71,10 +71,9 @@ src/
 - Caches result in shafile with file list for dirty checking
 - Tags container images with context SHA for reproducibility
 
-**Container Runtime Abstraction**:
-- Trait-based design to support multiple runtimes (Docker, Podman, etc.)
-- Auto-detection or explicit selection via config
-- Core operations: run, build, image_exists
+**Container Runtime**:
+- **Podman only** (daemonless, fast, Docker-compatible CLI)
+- No support for other runtimes - Podman is required
 
 **Bootstrap Mechanism**:
 - Generates code that runs inside container to set up environment
@@ -92,9 +91,9 @@ src/
 **Command Execution Flow**:
 1. Find and parse config file
 2. Apply environment variable overrides
-3. Detect/select container runtime
+3. Verify Podman is available
 4. Compute build context SHA (if `version_by_build_context` enabled)
-5. Build container runtime command with mounts, privileges, environment
+5. Build Podman command with mounts, privileges, environment
 6. Generate bootstrap script
 7. Execute container (or print command if `--gw-print`)
 
@@ -119,13 +118,21 @@ src/
 
 ## Implementation Considerations
 
-### Container Runtime Selection
+### Container Runtime
 
-The runtime has not yet been selected. Key considerations:
-- Cross-platform support (Linux, macOS, Windows)
-- Minimal dependencies
-- Docker compatibility (for migration from Python script)
-- Modern architecture
+**Podman Only**
+
+Giftwrap requires Podman and does not support other container runtimes.
+
+Why Podman:
+- **Daemonless architecture**: No background service required, simpler deployment
+- **Fast startup**: Can achieve <50ms container startup for cached images
+- **Docker-compatible CLI**: Minimal migration effort from Python script
+- **Modern architecture**: Better security model, rootless support
+- **Image building**: Uses buildah integration for `version_by_build_context` feature
+
+Giftwrap will error at startup if Podman is not available.
+
 
 ### Configuration File Format
 
@@ -161,7 +168,6 @@ Argument separator: `--` splits giftwrap/runtime args from user command
 ```rust
 struct Config {
     container_image: String,
-    runtime: Option<Runtime>,
     mount_to: Option<PathBuf>,
     cd_to: Option<PathBuf>,
     extra_shares: Vec<String>,
@@ -186,10 +192,9 @@ struct UserContext {
     cwd: PathBuf,
 }
 
-trait ContainerRuntime {
-    fn run(&self, args: &RunArgs) -> Result<ExitStatus>;
-    fn build(&self, context: &Path, tag: &str) -> Result<()>;
-    fn image_exists(&self, image: &str) -> Result<bool>;
+// Podman command builder
+struct PodmanCommand {
+    // Methods to build podman run/build commands
 }
 ```
 
@@ -207,6 +212,6 @@ The inspiration script (`inspiration/docker-runner.py`) demonstrates:
 
 Key differences in Rust version:
 - Use `GW_` prefix instead of `DR_` for environment variables
-- Runtime-agnostic (not Docker-specific)
+- Uses Podman instead of Docker (Podman required, no other runtimes supported)
 - Modern config format (likely TOML)
 - Type-safe implementation

@@ -9,8 +9,8 @@ while maintaining proper file permissions, environment variables, and terminal
 capabilities.
 
 **Note**: The Python inspiration script (`inspiration/docker-runner.py`) uses
-Docker specifically, but the Rust implementation has not yet decided on which
-container runtime to support.
+Docker specifically. The Rust implementation uses **Podman** as the only
+supported container runtime.
 
 ## Core Concepts
 
@@ -55,8 +55,7 @@ param_name value1 value2 value3
 - `persist_environment`: Path to file for persisting environment between runs
 - `prelaunch_hook`: Command to run on host before launching container
 - `uuid`: Unique identifier for this configuration (enables UUID-scoped env overrides)
-- `extra_args`: Additional arguments to pass to container runtime
-- `runtime`: Specify container runtime (docker, podman, etc.) - if not set, auto-detect
+- `extra_args`: Additional arguments to pass to Podman
 
 **Environment Variable Overrides**:
 
@@ -74,7 +73,7 @@ Configuration can be modified via environment variables with special prefixes:
 the build context, ensuring reproducible builds. The build context is a
 concept borrowed from docker. In docker all files visible to the dockerfile
 are part of the context. In giftwrap a specifically selected subset of the
-build root is visible to the container building engine (TBD).
+build root is visible to the container building engine (Podman/buildah).
 
 **Process**:
 1. Read an include file, `.giftwrapped` this file follows the pattern of a
@@ -82,7 +81,7 @@ build root is visible to the container building engine (TBD).
    context. (this was implemented using .dockerignore in the original python
    version)
 2. Collect all files matching the rules in `.giftwrapped`
-3. Include container definition file (TBD) (e.g., `Dockerfile`, `Containerfile`) and ignore file
+3. Include container definition file (`Containerfile` or `Dockerfile`) and ignore file
 4. Expand directories to all contained files
 5. Compute SHA1 (or SHA256) hash of all file contents (streamed to handle large files)
 6. Cache SHA and file list in a "shafile"
@@ -162,7 +161,7 @@ The tool injects a bootstrap script that runs inside the container to set up the
 giftwrap [--gw-flags] [-- runtime-flags] command [args...]
 ```
 
-**Flags** (prefix TBD, using `--gw-` for now):
+**Flags** (using `--gw-` prefix for "giftwrap"):
 - `--gw-print`: Print container command instead of executing
 - `--gw-ctx`: Print the build context SHA and exit
 - `--gw-print-image`: Print the image name (with SHA if applicable) and exit
@@ -201,12 +200,23 @@ Provides flexible, portable way to:
 - Drop privileges correctly
 - Work across different base images
 
-## Container Runtime Abstraction
+## Container Runtime
 
-### Supported Runtime
+### Podman (Only Supported Runtime)
 
-1. Has not yet been selected. Will determine at a later date. Docker is
-   reasonable, but not modern. Ideally something cross platform, and minimal.
+Giftwrap requires Podman and does not support other container runtimes.
+
+**Why Podman:**
+1. **Daemonless**: No background service required, simpler architecture
+2. **Fast**: Achieves <50ms container startup for cached images
+3. **Docker-compatible CLI**: Eases migration from Python script
+4. **Modern**: Better security model, supports rootless containers
+5. **Cross-platform**: Works on Linux, macOS, Windows
+
+**Implementation:**
+- giftwrap shells out to the `podman` CLI command
+- Verifies Podman is available at startup
+- Errors with helpful message if Podman is not installed
 
 ## Architecture for Rust Implementation
 
@@ -216,7 +226,7 @@ Provides flexible, portable way to:
 giftwrap/
 ├── config/           # Configuration file parsing and merging
 ├── build_context/    # SHA computation and caching
-├── runtime/          # Container runtime interfaces
+├── podman/           # Podman command generation and execution
 ├── terminal/         # TTY detection and terminfo handling
 ├── bootstrap/        # Generate bootstrap code for container
 └── main.rs           # CLI argument parsing and orchestration
@@ -227,7 +237,6 @@ giftwrap/
 ```rust
 struct Config {
     container_image: String,
-    runtime: Option<Runtime>,
     mount_to: Option<PathBuf>,
     cd_to: Option<PathBuf>,
     extra_shares: Vec<String>,
@@ -248,26 +257,26 @@ struct UserContext {
     cwd: PathBuf,
 }
 
-trait ContainerRuntime {
-    fn run(&self, args: &RunArgs) -> Result<ExitStatus>;
-    fn build(&self, context: &Path, tag: &str) -> Result<()>;
-    fn image_exists(&self, image: &str) -> Result<bool>;
-}
+// Podman command builder
+fn podman_run(config: &Config, user_ctx: &UserContext) -> Command;
+fn podman_build(context: &Path, tag: &str) -> Command;
+fn verify_podman_available() -> Result<()>;
 ```
 
 ### Critical Path
 
-1. Find config file → Parse → Apply env overrides
-2. Detect/select container runtime
+1. Verify Podman is available
+2. Find config file → Parse → Apply env overrides
 3. Compute build context SHA (if enabled)
-4. Build container runtime command with all mounts and settings
+4. Build Podman command with all mounts and settings
 5. Generate bootstrap code
-6. Execute container (or print if `--gw-print`)
+6. Execute Podman (or print if `--gw-print`)
 
 ## Compatibility Notes
 
 - Original Python script is Docker-specific
-- Rust version should work with an as of yet unspecified runtime.
-- Should maintain config file concepts for migration
-- Environment variable override mechanism is valuable to preserve
-- CLI flags should follow similar patterns but may use different prefix
+- Rust version requires Podman (no Docker support)
+- Config file concepts maintained for migration compatibility
+- Environment variable override mechanism preserved (`GW_` prefix instead of `DR_`)
+- CLI flags follow similar patterns with `--gw-` prefix
+- Migration from Python/Docker version requires installing Podman

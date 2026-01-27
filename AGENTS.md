@@ -1,7 +1,7 @@
 # giftwrap
 
 ## Project summary
-`giftwrap` is a Rust rewrite and modernization of `inspiration/docker-run.py`. It is a CLI wrapper around a container runtime (not yet finalized) that discovers a build root, reads a config file, optionally rebuilds/tag-bumps an image based on build context, and launches a container with user/UID/GID mapping, shared volumes, and environment handling.
+`giftwrap` is a Rust rewrite and modernization of `inspiration/docker-run.py`. It is a CLI wrapper around Podman (defaulting to rootless containers) that discovers a build root, reads a config file, optionally rebuilds/tag-bumps an image based on build context, and launches a container with user/UID/GID mapping, shared volumes, and environment handling.
 
 ## Source of truth for behavior
 - `inspiration/docker-run.py` is the reference implementation. Preserve its user-visible behavior unless the port explicitly modernizes or documents a change.
@@ -11,7 +11,7 @@
 - Parse the config file into parameters; allow environment variables to add/set/delete options.
 - Optional context SHA tagging based on `.dockerignore` with negated patterns and `Dockerfile`.
 - `--dr-*` flags for printing, rebuilding, overriding image/tag, extra docker args, config dump, etc.
-- Compose the container invocation (runtime TBD: Docker/Podman/Bubblewrap/other) with mounts of the build root, extra shares, and optional git-dir sharing.
+- Compose the Podman invocation (rootless by default) with mounts of the build root, extra shares, and optional git-dir sharing.
 - Optional prelaunch hook, extra shell sourcing, and prefix commands.
 - Persisted environment feature that round-trips environment variables between runs.
 - Inside-container setup: create user matching host UID/GID, apply environment overrides, set HOME, handle TERM/terminfo, then exec the requested command.

@@ -3,38 +3,40 @@
 ## Goals
 - Preserve user-visible behavior from `inspiration/docker-run.py` while modernizing implementation in Rust.
 - Remove the inline Python script injection into the container.
-- Make Podman integration HTTP-only (no CLI arg building, no library bindings).
-- Support interactive mode by bridging the user’s terminal/PTY to the Podman attach stream.
+- Use the Podman CLI (not HTTP) for container lifecycle, always via `podman run`.
+- Support fully interactive mode by letting Podman own the TTY (`exec podman run -it`).
+- Ensure commands launched inside the container are seamlessly usable (e.g., `vim` feels like `podman run -it`).
 - Provide a default in-container agent that is baked into the image, is musl-static, and is user-extensible.
 
 ## Constraints & source of truth
 - Reference behavior: `inspiration/docker-run.py`.
-- Config discovery: search upward for `.docker_build_root` or `docker_build_root`.
+- Config discovery: search upward for `.giftwrap` or `giftwrap` (replacement for legacy `.docker_build_root` or `docker_build_root`).
 - Keep CLI flag names and behavior unless intentionally documented changes.
 
-## High-level crate breakdown (orthogonal responsibilities)
-- `giftwrap-config`
+## High-level module breakdown (single crate)
+- Single crate with shared modules and two binaries: `giftwrap` (host CLI) and `giftwrap-agent` (in-container).
+- `config` module
   - Config discovery + parsing + validation.
-  - Apply `DR_USER_OPT_{SET,ADD,DEL}_*` environment overrides, with UUID scoping.
+  - Apply `GW_USER_OPT_{SET,ADD,DEL}_*` environment overrides (replacement for legacy `DR_USER_OPT_{SET,ADD,DEL}_*`), with UUID scoping.
   - Output: `Config`.
-- `giftwrap-context`
-  - `.dockerignore` negated patterns handling + context SHA + SHA file management.
+- `context` module
+  - Git-style file selection + `.gwinclude` (top-level and nested) semantics (replacement for `.dockerignore` negated patterns) + context SHA + SHA file management.
   - Output: `ContextSha` + file list metadata.
-- `giftwrap-cli`
-  - Parse `--dr-*` flags and split docker args vs user command via `--` delimiter.
+- `cli` module
+  - Parse `--gw-*` flags (replacement for legacy `--dr-*`) and split docker args vs user command via `--` delimiter.
   - Output: `CliOptions`, `UserCommand`.
-- `giftwrap-compose`
+- `compose` module
   - Pure builder: map `Config + CliOptions + HostInfo` to a `RunSpec`/`ContainerSpec`.
   - Handles mounts, extra shares, extra hosts, git-dir sharing, env overrides, workdir/mount mapping, terminfo decisions.
-- `giftwrap-internal` (agent API definitions)
+- `internal` module (agent API definitions)
   - Shared `RunSpec`/`InternalSpec` types and protocol versioning for agent.
   - Serialization format and compatibility rules.
-- `giftwrap-persist`
+- `persist` module
   - Persisted environment read/write format and compatibility.
-- `giftwrap-exec`
+- `exec` module
   - Side effects: prelaunch hook, rebuild/build, exec/print, host probes (isatty, ARG_MAX, infocmp, git).
-- `giftwrap` (bin)
-  - Orchestrates flow only; no business logic.
+- `main` module (binaries)
+  - Orchestrates flow only; no business logic in the binary entrypoints.
 
 ## Remove injected Python; replace with baked-in agent
 ### Decision
@@ -51,47 +53,42 @@
   - Exec the user command, propagate exit code.
 
 ### Extensibility
-- Provide a defined internal API (`giftwrap-agent-api` crate) for spec and hooks.
+- Provide a defined internal API (`internal` module) for spec and hooks.
 - Allow users to extend behavior by:
   - Replacing the agent with a custom build using the same API, or
   - Adding plugins discovered by the default agent.
 
-## Podman integration: HTTP-only
+## Podman integration: CLI-based
 ### Decision
-- Use Podman REST API exclusively.
-- No Podman CLI invocation and no libpod bindings.
+- Use Podman CLI exclusively.
+- No Podman REST API or libpod bindings.
 
-### Podman HTTP client
-- `podman-http` crate provides:
-  - `build_image`, `inspect_image`, `create_container`, `start_container`,
-    `attach`, `wait`, `remove`, `logs`.
-- Connection over Unix domain socket (rootless or rootful).
-- Optional API version negotiation at startup.
-- Clear error mapping to user-visible messages.
+### Podman CLI wrapper
+- `podman_cli` module provides:
+  - `build_image`, `inspect_image`, `run`.
+- Compose Podman CLI args, and `exec` Podman so it directly owns stdin/stdout/stderr.
+- Always include `--rm` with `podman run`.
+- Clear error mapping to user-visible messages before `exec`.
 
-### Interactive mode (PTY bridging)
-- HTTP attach hijacks the connection; use it as the data stream.
-- Put user terminal into raw mode.
-- Bridge bytes:
-  - stdin -> attach stream
-  - attach stream -> stdout/stderr
-- Handle `SIGWINCH` and call container resize endpoint to keep TTY size in sync.
-- If not a TTY, fall back to non-interactive attach.
+### Interactive mode (TTY ownership via exec)
+- Always `exec` Podman (`podman run -it`) so it directly owns the TTY/FDS.
+- Let Podman handle raw mode, SIGWINCH, and resize propagation.
+- Preserve control sequences and signals (Ctrl+C, Ctrl+Z, etc.) via Podman’s native TTY handling.
+- If not a TTY, fall back to non-interactive `podman` invocation.
 
 ## Behavior parity targets
-- Preserve all `--dr-*` flags:
+- Preserve all `--gw-*` flags (replacement for legacy `--dr-*`):
   - print, ctx, print-image, use-ctx, img, rebuild, show-config, extra-args, help.
-- Maintain build-context SHA tagging behavior with `.dockerignore` negated rules.
+- Maintain build-context SHA tagging behavior with git-style file selection and `.gwinclude` semantics (replacement for `.dockerignore` negated rules).
 - Preserve shared mount semantics and optional git-dir sharing.
 - Preserve persisted environment behavior (new implementation but same semantics).
 
 ## Next steps (implementation sequence)
 1) Define shared data models: `Config`, `CliOptions`, `RunSpec`, `InternalSpec`, `ContainerSpec`.
-2) Implement `giftwrap-config` and `giftwrap-cli` to match legacy behavior.
-3) Implement `giftwrap-context` to match `.dockerignore` + SHA logic.
-4) Implement `giftwrap-agent-api` and skeleton `giftwrap-agent` (musl static build).
-5) Implement `podman-http` client and wire into `giftwrap-exec`.
-6) Replace old docker CLI invocation with HTTP create/start/attach/wait.
+2) Implement `config` and `cli` modules to match legacy behavior.
+3) Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
+4) Implement `internal` module and skeleton `giftwrap-agent` (musl static build).
+5) Implement `podman_cli` module and wire into `exec`.
+6) Replace old docker CLI invocation with Podman CLI `run`.
 7) Add PTY bridging and resize handling for interactive mode.
 8) Validate parity with the Python script on key flows.
-

@@ -1,0 +1,188 @@
+use std::fmt;
+use std::path::Path;
+use std::process::{Command, ExitStatus};
+
+use crate::internal::{ContainerSpec, Mount};
+
+#[derive(Debug)]
+pub struct PodmanError {
+    message: String,
+}
+
+impl PodmanError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for PodmanError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for PodmanError {}
+
+pub fn build_image(image: &str, context_dir: &Path) -> Result<(), PodmanError> {
+    let status = Command::new("podman")
+        .arg("build")
+        .arg("-t")
+        .arg(image)
+        .arg(context_dir)
+        .status()
+        .map_err(|err| PodmanError::new(format!("Error: failed to launch podman build: {err}")))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(PodmanError::new(format!(
+            "Error: podman build failed (exit {})",
+            format_exit_status(&status)
+        )))
+    }
+}
+
+pub fn inspect_image(image: &str) -> Result<bool, PodmanError> {
+    let status = Command::new("podman")
+        .arg("image")
+        .arg("exists")
+        .arg(image)
+        .status()
+        .map_err(|err| {
+            PodmanError::new(format!("Error: failed to launch podman image exists: {err}"))
+        })?;
+
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(PodmanError::new(format!(
+            "Error: podman image exists failed (exit {})",
+            format_exit_status(&status)
+        ))),
+    }
+}
+
+pub fn build_run_args(spec: &ContainerSpec) -> Result<Vec<String>, PodmanError> {
+    let mut args = Vec::new();
+    args.push("run".to_string());
+
+    if spec.interactive {
+        args.push("-i".to_string());
+    }
+    if spec.tty {
+        args.push("-t".to_string());
+    }
+
+    args.push("--rm".to_string());
+
+    if spec.init {
+        args.push("--init".to_string());
+    }
+    if spec.privileged {
+        args.push("--privileged=true".to_string());
+    }
+
+    if let Some(hostname) = &spec.hostname {
+        args.push("-h".to_string());
+        args.push(hostname.clone());
+    }
+
+    for host in &spec.extra_hosts {
+        args.push("--add-host".to_string());
+        args.push(host.clone());
+    }
+
+    for mount in &spec.mounts {
+        args.push("-v".to_string());
+        args.push(mount_to_arg(mount));
+    }
+
+    for (key, value) in &spec.env {
+        args.push("--env".to_string());
+        args.push(format!("{key}={value}"));
+    }
+
+    if let Some(workdir) = &spec.workdir {
+        args.push("-w".to_string());
+        args.push(workdir.to_string_lossy().into_owned());
+    }
+
+    if let Some(user) = &spec.user {
+        args.push("-u".to_string());
+        args.push(user.clone());
+    }
+
+    if let Some(entrypoint) = &spec.entrypoint {
+        match entrypoint.as_slice() {
+            [] => {}
+            [single] => {
+                args.push("--entrypoint".to_string());
+                args.push(single.clone());
+            }
+            _ => {
+                return Err(PodmanError::new(
+                    "Error: entrypoint must be a single argv element",
+                ));
+            }
+        }
+    }
+
+    for extra in &spec.extra_args {
+        args.push(extra.clone());
+    }
+
+    args.push(spec.image.clone());
+    args.extend(spec.command.iter().cloned());
+
+    Ok(args)
+}
+
+#[cfg(unix)]
+pub fn exec_run(spec: &ContainerSpec) -> Result<(), PodmanError> {
+    use std::os::unix::process::CommandExt;
+
+    let args = build_run_args(spec)?;
+    let err = Command::new("podman").args(args).exec();
+    Err(PodmanError::new(format!(
+        "Error: failed to exec podman run: {err}"
+    )))
+}
+
+#[cfg(not(unix))]
+pub fn exec_run(_spec: &ContainerSpec) -> Result<(), PodmanError> {
+    Err(PodmanError::new(
+        "Error: podman exec is only supported on unix platforms",
+    ))
+}
+
+fn mount_to_arg(mount: &Mount) -> String {
+    let mut options: Vec<String> = mount
+        .options
+        .iter()
+        .filter(|opt| !opt.is_empty())
+        .cloned()
+        .collect();
+    if mount.read_only && !options.iter().any(|opt| opt == "ro") {
+        options.push("ro".to_string());
+    }
+
+    let mut arg = format!(
+        "{}:{}",
+        mount.source.to_string_lossy(),
+        mount.target.to_string_lossy()
+    );
+    if !options.is_empty() {
+        arg.push(':');
+        arg.push_str(&options.join(","));
+    }
+    arg
+}
+
+fn format_exit_status(status: &ExitStatus) -> String {
+    match status.code() {
+        Some(code) => code.to_string(),
+        None => "signal".to_string(),
+    }
+}

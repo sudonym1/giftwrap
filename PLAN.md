@@ -92,11 +92,12 @@
 - Shared internal data models defined and mirrored in the agent crate.
 - Config discovery/parsing + GW_USER_OPT_* environment overrides implemented.
 - CLI flag parsing implemented (including `--` split handling).
+- Context module implemented (gwinclude/dockerignore selection + SHA + sha-file reuse).
 
 ## Next steps (implementation sequence)
 - [x] Define shared data models: `Config`, `CliOptions`, `RunSpec`, `InternalSpec`, `ContainerSpec`.
 - [x] Implement `config` and `cli` modules to match legacy behavior.
-- [ ] Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
+- [x] Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
 - [ ] Implement agent runtime pieces (user setup, env handling, exec) and musl-static build config.
 - [ ] Implement `podman_cli` module and wire into `exec`.
 - [ ] Replace old docker CLI invocation with Podman CLI `run`.

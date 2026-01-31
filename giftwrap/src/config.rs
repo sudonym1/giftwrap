@@ -95,9 +95,9 @@ fn discover_config(start_dir: &Path) -> Result<(PathBuf, PathBuf), ConfigError> 
                 return Ok((cwd, candidate));
             }
         }
-        let parent = cwd.parent().ok_or_else(|| {
-            ConfigError::new("Error: never found a config file")
-        })?;
+        let parent = cwd
+            .parent()
+            .ok_or_else(|| ConfigError::new("Error: never found a config file"))?;
         cwd = parent.to_path_buf();
     }
 
@@ -153,17 +153,13 @@ fn apply_env_overrides(
             }
             EnvOpt::Add => {
                 let parts = shell_words::split(&value).map_err(|err| {
-                    ConfigError::new(format!(
-                        "Error: failed to parse env override {key}: {err}"
-                    ))
+                    ConfigError::new(format!("Error: failed to parse env override {key}: {err}"))
                 })?;
                 params.entry(opt).or_default().extend(parts);
             }
             EnvOpt::Set => {
                 let parts = shell_words::split(&value).map_err(|err| {
-                    ConfigError::new(format!(
-                        "Error: failed to parse env override {key}: {err}"
-                    ))
+                    ConfigError::new(format!("Error: failed to parse env override {key}: {err}"))
                 })?;
                 params.insert(opt, parts);
             }

@@ -85,15 +85,15 @@
 - Preserve persisted environment behavior (new implementation but same semantics).
 
 ## Current status
-- Two-crate workspace still in place (`giftwrap` + `giftwrap-agent`) pending consolidation into a single binary.
-- Shared internal data models defined (currently mirrored between host + agent crates).
+- Single root `giftwrap` crate with host + agent subcommand.
+- Shared internal data models defined once and used by both host + agent.
 - Config discovery/parsing + GW_USER_OPT_* environment overrides implemented.
 - CLI flag parsing implemented (including `--` split handling).
 - Context module implemented (gwinclude-only selection + SHA + sha-file reuse).
 - Config discovery now uses `.giftwrap` / `giftwrap`, and config keys are prefixed with `gw` where applicable.
 - Runtime CLI wrapper implemented with build/inspect/run and exec wiring.
 - CLI now composes a minimal runtime run from config/flags and executes it.
-- Host now bind-mounts the `giftwrap-agent` binary (prefers musl builds) and uses it as the entrypoint.
+- Host now bind-mounts the unified `giftwrap` binary (prefers musl builds) and uses it as the entrypoint.
 - Agent runtime implemented (user setup, env handling, terminfo, exec) with Alpine-friendly fallbacks.
 
 ## Next steps (implementation sequence)
@@ -101,10 +101,10 @@
 - [x] Implement `config` and `cli` modules to match legacy behavior.
 - [x] Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
 - [x] Implement agent runtime pieces (user setup, env handling, exec).
-- [ ] Collapse workspace to a single top-level `giftwrap` crate.
-- [ ] Move current `giftwrap` crate contents to repo root crate.
-- [ ] Fold `giftwrap-agent` functionality into `giftwrap agent` subcommand.
-- [ ] Update runtime to bind-mount the unified `giftwrap` binary and set entrypoint to `giftwrap agent`.
+- [x] Collapse workspace to a single top-level `giftwrap` crate.
+- [x] Move current `giftwrap` crate contents to repo root crate.
+- [x] Fold agent functionality into `giftwrap agent` subcommand.
+- [x] Update runtime to bind-mount the unified `giftwrap` binary and set entrypoint to `giftwrap agent`.
 - [ ] Add musl-static build config/docs for unified `giftwrap` binary (target config + release guidance).
 - [x] Implement runtime CLI module and wire into `exec`.
 - [x] Replace old runtime CLI invocation with `podman run`.

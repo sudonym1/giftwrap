@@ -1,5 +1,3 @@
-mod internal;
-
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -10,17 +8,11 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::internal;
+
 const SPEC_ENV: &str = "GW_INTERNAL_SPEC";
 
-fn main() {
-    if let Err(message) = run() {
-        eprintln!("{message}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), String> {
-    let args: Vec<String> = env::args().skip(1).collect();
+pub fn run(args: &[String]) -> Result<(), String> {
     if let Some(flag) = args.first() {
         if let Some(path) = flag.strip_prefix("--dump-env=") {
             dump_env(Path::new(path))?;
@@ -273,7 +265,7 @@ fn current_agent_path() -> String {
     env::current_exe()
         .ok()
         .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "giftwrap-agent".to_string())
+        .unwrap_or_else(|| "giftwrap".to_string())
 }
 
 fn build_shell_script(spec: &internal::InternalSpec, agent_path: &str) -> String {
@@ -306,7 +298,7 @@ fn build_shell_script(spec: &internal::InternalSpec, agent_path: &str) -> String
     if let Some(persist) = &spec.persist_env {
         if persist.save {
             cmds.push(format!(
-                "{} --dump-env {}",
+                "{} agent --dump-env {}",
                 shell_escape(agent_path),
                 shell_escape(&persist.path.to_string_lossy())
             ));

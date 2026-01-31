@@ -6,18 +6,16 @@
 - Use the container runtime CLI (not HTTP) for container lifecycle, always via `podman run`.
 - Support fully interactive mode by letting the runtime own the TTY (`exec podman run -it`).
 - Ensure commands launched inside the container are seamlessly usable (e.g., `vim` feels like `podman run -it`).
-- Provide a default in-container agent that is bind-mounted from the host, is musl-static, and is user-extensible.
+- Provide a single musl-compiled `giftwrap` binary that serves as both host CLI and in-container agent (`giftwrap agent ...`), bind-mounted into the container.
 
 ## Constraints & source of truth
 - Reference behavior: legacy script in `inspiration/`.
 - Config discovery: search upward for `.giftwrap` or `giftwrap`.
 - Keep CLI flag names and behavior unless intentionally documented changes.
 
-## High-level crate breakdown (two crates)
-- Workspace with two crates:
-  - `giftwrap` (host CLI, standard libc target)
-  - `giftwrap-agent` (in-container, musl-static target)
-- `giftwrap` crate modules:
+## High-level crate breakdown (single crate)
+- Single crate at repo root: `giftwrap` (host CLI + in-container agent subcommand).
+- Modules:
   - `config`
     - Config discovery + parsing + validation.
     - Apply `GW_USER_OPT_{SET,ADD,DEL}_*` environment overrides (replacement for legacy `DR_USER_OPT_{SET,ADD,DEL}_*`), with UUID scoping.
@@ -38,17 +36,16 @@
     - Persisted environment read/write format and compatibility.
   - `exec`
     - Side effects: prelaunch hook, rebuild/build, exec/print, host probes (isatty, ARG_MAX, infocmp, git).
-- `giftwrap-agent` crate modules:
-  - `internal` (agent API definitions mirrored from `giftwrap`).
-  - Agent runtime modules for user setup, env handling, and exec.
+  - `agent`
+    - In-container agent runtime (user setup, env handling, terminfo handling, exec).
 
-## Remove injected Python; replace with bind-mounted agent
+## Remove injected Python; replace with bind-mounted subcommand
 ### Decision
 - Do not inject Python into the container.
-- Bind-mount a host `giftwrap-agent` into the container and set it as entrypoint.
+- Bind-mount the host `giftwrap` binary into the container and set entrypoint to `giftwrap agent`.
 
 ### Agent requirements
-- `giftwrap-agent` compiled as **musl static** Rust binary.
+- `giftwrap` compiled as **musl static** Rust binary.
 - Handles in-container setup:
   - Optional user identity mapping or `keep-id` style behavior depending on runtime plan.
   - HOME/workdir setup.
@@ -88,15 +85,15 @@
 - Preserve persisted environment behavior (new implementation but same semantics).
 
 ## Current status
-- Workspace split into two crates: `giftwrap` (host CLI) and `giftwrap-agent` (agent).
-- Shared internal data models defined and mirrored in the agent crate.
+- Two-crate workspace still in place (`giftwrap` + `giftwrap-agent`) pending consolidation into a single binary.
+- Shared internal data models defined (currently mirrored between host + agent crates).
 - Config discovery/parsing + GW_USER_OPT_* environment overrides implemented.
 - CLI flag parsing implemented (including `--` split handling).
 - Context module implemented (gwinclude-only selection + SHA + sha-file reuse).
 - Config discovery now uses `.giftwrap` / `giftwrap`, and config keys are prefixed with `gw` where applicable.
 - Runtime CLI wrapper implemented with build/inspect/run and exec wiring.
 - CLI now composes a minimal runtime run from config/flags and executes it.
-- Host now bind-mounts `giftwrap-agent` (prefers musl builds) and uses it as the entrypoint.
+- Host now bind-mounts the `giftwrap-agent` binary (prefers musl builds) and uses it as the entrypoint.
 - Agent runtime implemented (user setup, env handling, terminfo, exec) with Alpine-friendly fallbacks.
 
 ## Next steps (implementation sequence)
@@ -104,7 +101,11 @@
 - [x] Implement `config` and `cli` modules to match legacy behavior.
 - [x] Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
 - [x] Implement agent runtime pieces (user setup, env handling, exec).
-- [ ] Add musl-static build config/docs for `giftwrap-agent` (target config + release guidance).
+- [ ] Collapse workspace to a single top-level `giftwrap` crate.
+- [ ] Move current `giftwrap` crate contents to repo root crate.
+- [ ] Fold `giftwrap-agent` functionality into `giftwrap agent` subcommand.
+- [ ] Update runtime to bind-mount the unified `giftwrap` binary and set entrypoint to `giftwrap agent`.
+- [ ] Add musl-static build config/docs for unified `giftwrap` binary (target config + release guidance).
 - [x] Implement runtime CLI module and wire into `exec`.
 - [x] Replace old runtime CLI invocation with `podman run`.
 - [ ] Validate parity with the Python script on key flows.

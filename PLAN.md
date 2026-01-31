@@ -6,7 +6,7 @@
 - Use the container runtime CLI (not HTTP) for container lifecycle, always via `podman run`.
 - Support fully interactive mode by letting the runtime own the TTY (`exec podman run -it`).
 - Ensure commands launched inside the container are seamlessly usable (e.g., `vim` feels like `podman run -it`).
-- Provide a default in-container agent that is baked into the image, is musl-static, and is user-extensible.
+- Provide a default in-container agent that is bind-mounted from the host, is musl-static, and is user-extensible.
 
 ## Constraints & source of truth
 - Reference behavior: legacy script in `inspiration/`.
@@ -42,10 +42,10 @@
   - `internal` (agent API definitions mirrored from `giftwrap`).
   - Agent runtime modules for user setup, env handling, and exec.
 
-## Remove injected Python; replace with baked-in agent
+## Remove injected Python; replace with bind-mounted agent
 ### Decision
 - Do not inject Python into the container.
-- Use a default `giftwrap-agent` baked into the base image and set as entrypoint.
+- Bind-mount a host `giftwrap-agent` into the container and set it as entrypoint.
 
 ### Agent requirements
 - `giftwrap-agent` compiled as **musl static** Rust binary.
@@ -96,12 +96,15 @@
 - Config discovery now uses `.giftwrap` / `giftwrap`, and config keys are prefixed with `gw` where applicable.
 - Runtime CLI wrapper implemented with build/inspect/run and exec wiring.
 - CLI now composes a minimal runtime run from config/flags and executes it.
+- Host now bind-mounts `giftwrap-agent` (prefers musl builds) and uses it as the entrypoint.
+- Agent runtime implemented (user setup, env handling, terminfo, exec) with Alpine-friendly fallbacks.
 
 ## Next steps (implementation sequence)
 - [x] Define shared data models: `Config`, `CliOptions`, `RunSpec`, `InternalSpec`, `ContainerSpec`.
 - [x] Implement `config` and `cli` modules to match legacy behavior.
 - [x] Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
-- [ ] Implement agent runtime pieces (user setup, env handling, exec) and musl-static build config.
+- [x] Implement agent runtime pieces (user setup, env handling, exec).
+- [ ] Add musl-static build config/docs for `giftwrap-agent` (target config + release guidance).
 - [x] Implement runtime CLI module and wire into `exec`.
 - [x] Replace old runtime CLI invocation with `podman run`.
 - [ ] Validate parity with the Python script on key flows.

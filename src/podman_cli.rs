@@ -190,3 +190,151 @@ fn format_exit_status(status: &ExitStatus) -> String {
         None => "signal".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use super::build_run_args;
+    use crate::internal::{ContainerSpec, Mount};
+
+    fn base_spec() -> ContainerSpec {
+        ContainerSpec {
+            image: "example:latest".to_string(),
+            hostname: None,
+            mounts: Vec::new(),
+            env: BTreeMap::new(),
+            workdir: None,
+            user: None,
+            extra_hosts: Vec::new(),
+            privileged: false,
+            init: false,
+            remove: false,
+            interactive: false,
+            tty: false,
+            entrypoint: None,
+            command: Vec::new(),
+            extra_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn build_run_args_orders_flags_and_values() {
+        let mut spec = base_spec();
+        spec.image = "registry/app:tag".to_string();
+        spec.interactive = true;
+        spec.tty = true;
+        spec.remove = true;
+        spec.init = true;
+        spec.privileged = true;
+        spec.hostname = Some("gw-host".to_string());
+        spec.extra_hosts = vec![
+            "host.docker.internal:host-gateway".to_string(),
+            "db:10.0.0.2".to_string(),
+        ];
+        spec.mounts = vec![
+            Mount {
+                source: PathBuf::from("/src"),
+                target: PathBuf::from("/workspace"),
+                read_only: false,
+                options: vec!["z".to_string()],
+            },
+            Mount {
+                source: PathBuf::from("/data"),
+                target: PathBuf::from("/data"),
+                read_only: true,
+                options: vec!["Z".to_string()],
+            },
+        ];
+        spec.env.insert("B".to_string(), "2".to_string());
+        spec.env.insert("A".to_string(), "1".to_string());
+        spec.workdir = Some(PathBuf::from("/work"));
+        spec.user = Some("1000:1000".to_string());
+        spec.entrypoint = Some(vec!["/bin/sh".to_string()]);
+        spec.extra_args = vec![
+            "--security-opt=label=disable".to_string(),
+            "--pids-limit=100".to_string(),
+        ];
+        spec.command = vec!["bash".to_string(), "-lc".to_string(), "true".to_string()];
+
+        let args = build_run_args(&spec).expect("build_run_args failed");
+        assert_eq!(
+            args,
+            vec![
+                "run",
+                "-i",
+                "-t",
+                "--rm",
+                "--init",
+                "--privileged=true",
+                "-h",
+                "gw-host",
+                "--add-host",
+                "host.docker.internal:host-gateway",
+                "--add-host",
+                "db:10.0.0.2",
+                "-v",
+                "/src:/workspace:z",
+                "-v",
+                "/data:/data:Z,ro",
+                "--env",
+                "A=1",
+                "--env",
+                "B=2",
+                "-w",
+                "/work",
+                "-u",
+                "1000:1000",
+                "--entrypoint",
+                "/bin/sh",
+                "--security-opt=label=disable",
+                "--pids-limit=100",
+                "registry/app:tag",
+                "bash",
+                "-lc",
+                "true",
+            ]
+        );
+    }
+
+    #[test]
+    fn build_run_args_skips_empty_entrypoint() {
+        let mut spec = base_spec();
+        spec.entrypoint = Some(Vec::new());
+        spec.image = "busybox".to_string();
+        spec.command = vec!["echo".to_string(), "ok".to_string()];
+
+        let args = build_run_args(&spec).expect("build_run_args failed");
+        assert_eq!(args, vec!["run", "busybox", "echo", "ok"]);
+    }
+
+    #[test]
+    fn build_run_args_rejects_multi_element_entrypoint() {
+        let mut spec = base_spec();
+        spec.entrypoint = Some(vec!["/bin/sh".to_string(), "-c".to_string()]);
+
+        let err = build_run_args(&spec)
+            .err()
+            .expect("expected build_run_args to fail");
+        assert_eq!(
+            err.to_string(),
+            "Error: entrypoint must be a single argv element"
+        );
+    }
+
+    #[test]
+    fn build_run_args_keeps_ro_option_once() {
+        let mut spec = base_spec();
+        spec.image = "busybox".to_string();
+        spec.mounts = vec![Mount {
+            source: PathBuf::from("/src"),
+            target: PathBuf::from("/dest"),
+            read_only: true,
+            options: vec!["ro".to_string(), "Z".to_string()],
+        }];
+
+        let args = build_run_args(&spec).expect("build_run_args failed");
+        assert_eq!(args, vec!["run", "-v", "/src:/dest:ro,Z", "busybox"]);
+    }
+}

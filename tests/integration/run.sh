@@ -11,7 +11,6 @@ Usage: run.sh [--case NAME]
 
 Environment:
   GIFTWRAP_INTEGRATION=1   required safety switch
-  GIFTWRAP_BIN             path to giftwrap binary (optional)
   GW_IMAGE                 base image (default: debian:bookworm-slim)
   GW_IMAGE_ALT             override image (default: debian:bookworm)
   RUN_ID                   artifacts run id (default: UTC timestamp)
@@ -47,35 +46,9 @@ RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
 ARTIFACTS_DIR="$ARTIFACTS_ROOT/$RUN_ID"
 mkdir -p "$ARTIFACTS_DIR"
 
-find_giftwrap_bin() {
-  if [[ -n "${GIFTWRAP_BIN:-}" ]]; then
-    echo "$GIFTWRAP_BIN"
-    return 0
-  fi
-
-  local candidate
-  for candidate in \
-    "$ROOT_DIR"/target/*-unknown-linux-musl/release/giftwrap \
-    "$ROOT_DIR"/target/*-unknown-linux-musl/debug/giftwrap \
-    "$ROOT_DIR"/target/release/giftwrap \
-    "$ROOT_DIR"/target/debug/giftwrap; do
-    if [[ -x "$candidate" ]]; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-
-  if command -v giftwrap >/dev/null 2>&1; then
-    command -v giftwrap
-    return 0
-  fi
-  return 1
-}
-
 find_musl_bin() {
   local candidate
   for candidate in \
-    "$ROOT_DIR"/target/*-unknown-linux-musl/release/giftwrap \
     "$ROOT_DIR"/target/*-unknown-linux-musl/debug/giftwrap; do
     if [[ -x "$candidate" ]]; then
       echo "$candidate"
@@ -91,65 +64,31 @@ build_musl_bin() {
     return 1
   fi
   echo "Building musl giftwrap agent..." >&2
-  (cd "$ROOT_DIR" && cargo build --release --target x86_64-unknown-linux-musl)
+  (cd "$ROOT_DIR" && cargo build --target x86_64-unknown-linux-musl)
 }
 
-is_static_binary() {
-  local bin="$1"
-  if ! command -v ldd >/dev/null 2>&1; then
-    return 1
-  fi
-  local output
-  output=$(ldd "$bin" 2>&1 || true)
-  case "$output" in
-    *"not a dynamic executable"*|*"statically linked"*)
-      return 0
-      ;;
-  esac
-  return 1
-}
+build_musl_bin
 
-GIFTWRAP_BIN=$(find_giftwrap_bin || true)
+GIFTWRAP_BIN=$(find_musl_bin || true)
 if [[ -z "${GIFTWRAP_BIN:-}" ]]; then
-  echo "giftwrap binary not found; build with cargo or set GIFTWRAP_BIN" >&2
+  cat <<'EOF' >&2
+No container-compatible giftwrap binary found after build.
+Expected a musl build at:
+  target/<triple>-unknown-linux-musl/debug/giftwrap
+EOF
   exit 1
+fi
+if command -v realpath >/dev/null 2>&1; then
+  GIFTWRAP_BIN=$(realpath "$GIFTWRAP_BIN")
+elif command -v readlink >/dev/null 2>&1; then
+  GIFTWRAP_BIN=$(readlink -f "$GIFTWRAP_BIN")
 fi
 if [[ ! -x "$GIFTWRAP_BIN" ]]; then
   echo "giftwrap binary is not executable: $GIFTWRAP_BIN" >&2
   exit 1
 fi
 
-AGENT_BIN=${GW_AGENT_BIN:-}
-if [[ -z "${AGENT_BIN:-}" ]]; then
-  if is_static_binary "$GIFTWRAP_BIN"; then
-    AGENT_BIN="$GIFTWRAP_BIN"
-  fi
-fi
-if [[ -z "${AGENT_BIN:-}" ]]; then
-  AGENT_BIN=$(find_musl_bin || true)
-fi
-if [[ -z "${AGENT_BIN:-}" && -z "${GW_AGENT_BIN:-}" ]]; then
-  build_musl_bin || true
-  AGENT_BIN=$(find_musl_bin || true)
-fi
-if [[ -z "${AGENT_BIN:-}" ]]; then
-  cat <<'EOF' >&2
-No container-compatible giftwrap agent found.
-Build a static musl binary (recommended):
-  cargo build --release --target x86_64-unknown-linux-musl
-Or set GW_AGENT_BIN to a compatible giftwrap binary path.
-EOF
-  exit 1
-fi
-if command -v realpath >/dev/null 2>&1; then
-  AGENT_BIN=$(realpath "$AGENT_BIN")
-elif command -v readlink >/dev/null 2>&1; then
-  AGENT_BIN=$(readlink -f "$AGENT_BIN")
-fi
-if [[ ! -x "$AGENT_BIN" ]]; then
-  echo "agent binary is not executable: $AGENT_BIN" >&2
-  exit 1
-fi
+AGENT_BIN="$GIFTWRAP_BIN"
 
 read_lines() {
   local file="$1"
@@ -186,6 +125,7 @@ render_arg() {
   arg=${arg//\{\{GW_IMAGE\}\}/$GW_IMAGE}
   arg=${arg//\{\{GW_IMAGE_ALT\}\}/$GW_IMAGE_ALT}
   arg=${arg//\{\{GW_IMAGE_BASE\}\}/$GW_IMAGE_BASE}
+  arg=${arg//\{\{RUN_ID\}\}/$RUN_ID}
   arg=${arg//\{\{CTX_SHA\}\}/$CTX_SHA}
   arg=${arg//\{\{GIT_DIR_PATH\}\}/$GIT_DIR_PATH}
   printf '%s' "$arg"
@@ -443,4 +383,5 @@ for case in "${CASES[@]}"; do
 done
 
 echo "Artifacts written to $ARTIFACTS_DIR"
-find  "$ARTIFACTS_DIR" -name exit-code | xargs snail -m '"{$src}: {$text.strip()}"'
+export ARTIFACTS_DIR
+find  "$ARTIFACTS_DIR" -name exit-code | xargs snail -m '"{$src.removeprefix($env.ARTIFACTS_DIR+"/")}: {$text.strip()}"'

@@ -44,6 +44,28 @@ pub fn build_image(image: &str, context_dir: &Path) -> Result<(), PodmanError> {
     }
 }
 
+pub fn image_exists(image: &str) -> Result<bool, PodmanError> {
+    let status = Command::new("podman")
+        .args(["image", "exists", image])
+        .status()
+        .map_err(|err| {
+            PodmanError::new(format!(
+                "Error: failed to launch runtime image check: {err}"
+            ))
+        })?;
+
+    if status.success() {
+        Ok(true)
+    } else if status.code() == Some(1) {
+        Ok(false)
+    } else {
+        Err(PodmanError::new(format!(
+            "Error: runtime image check failed (exit {})",
+            format_exit_status(&status)
+        )))
+    }
+}
+
 pub fn build_run_args(spec: &ContainerSpec) -> Result<Vec<String>, PodmanError> {
     let mut args = Vec::new();
     args.push("run".to_string());

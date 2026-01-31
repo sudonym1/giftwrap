@@ -83,7 +83,13 @@ fn run() -> Result<(), String> {
         run_hook(hook, &root_dir)?;
     }
 
-    if let Some(rebuild_image) = rebuild_plan(cli_opts.rebuild, &image) {
+    let auto_build = !cli_opts.no_auto_build;
+    let image_exists = if cli_opts.rebuild || !auto_build {
+        true
+    } else {
+        exec::image_exists(&image).map_err(|err| err.to_string())?
+    };
+    if let Some(rebuild_image) = rebuild_plan(cli_opts.rebuild, auto_build, image_exists, &image) {
         println!("Rebuilding container {rebuild_image}");
         exec::build_image(&rebuild_image, &root_dir).map_err(|err| err.to_string())?;
     }
@@ -140,8 +146,10 @@ fn run() -> Result<(), String> {
         }
     }
 
-    if params.contains_key("share_git_dir") && let Some(git_mount) = share_git_dir(&root_dir) {
-        mounts.push(git_mount);
+    if params.contains_key("share_git_dir") {
+        for git_mount in share_git_dir(&root_dir) {
+            mounts.push(git_mount);
+        }
     }
 
     let mut extra_shell_path = None;
@@ -240,6 +248,7 @@ GW Flags:
     use-ctx: force a particular context sha
     img: force a particular image
     rebuild: rebuild the container image
+    no-auto-build: disable auto rebuild when image is missing
     show-config: dump the parameters
     extra-args: add extra args to the runtime invocation
 "#
@@ -309,8 +318,10 @@ fn select_image(
     Ok(image)
 }
 
-fn rebuild_plan(rebuild: bool, image: &str) -> Option<String> {
+fn rebuild_plan(rebuild: bool, auto_build: bool, image_exists: bool, image: &str) -> Option<String> {
     if rebuild {
+        Some(image.to_string())
+    } else if auto_build && !image_exists {
         Some(image.to_string())
     } else {
         None
@@ -392,27 +403,47 @@ fn parse_share(share: &str, root_dir: &Path) -> Option<internal::Mount> {
     })
 }
 
-fn share_git_dir(root_dir: &Path) -> Option<internal::Mount> {
-    let output = Command::new("git")
-        .arg("rev-parse")
-        .arg("--git-common-dir")
-        .current_dir(root_dir)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+fn share_git_dir(root_dir: &Path) -> Vec<internal::Mount> {
+    let mut mounts = Vec::new();
+    let root_real = root_dir
+        .canonicalize()
+        .unwrap_or_else(|_| root_dir.to_path_buf());
+    let mut seen = std::collections::HashSet::new();
+
+    for arg in ["--git-dir", "--git-common-dir"] {
+        let output = match Command::new("git")
+            .arg("rev-parse")
+            .arg(arg)
+            .current_dir(root_dir)
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => continue,
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let raw = String::from_utf8_lossy(&output.stdout);
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let git_dir = resolve_real_path(raw, root_dir);
+        if git_dir.starts_with(&root_real) {
+            continue;
+        }
+        if !seen.insert(git_dir.clone()) {
+            continue;
+        }
+        mounts.push(internal::Mount {
+            source: git_dir.clone(),
+            target: git_dir,
+            read_only: false,
+            options: Vec::new(),
+        });
     }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let git_dir = abs_path(raw.trim(), root_dir);
-    if git_dir.starts_with(root_dir) {
-        return None;
-    }
-    Some(internal::Mount {
-        source: git_dir.clone(),
-        target: git_dir,
-        read_only: false,
-        options: Vec::new(),
-    })
+
+    mounts
 }
 
 fn abs_path(path: &str, root_dir: &Path) -> PathBuf {
@@ -611,6 +642,7 @@ mod tests {
     use crate::internal;
     use serde_json::Value;
     use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::Mutex;
@@ -708,8 +740,10 @@ mod tests {
     #[test]
     fn rebuild_plan_returns_image_when_enabled() {
         let image = "registry/app:tag";
-        assert_eq!(rebuild_plan(false, image), None);
-        assert_eq!(rebuild_plan(true, image), Some(image.to_string()));
+        assert_eq!(rebuild_plan(false, false, true, image), None);
+        assert_eq!(rebuild_plan(true, false, true, image), Some(image.to_string()));
+        assert_eq!(rebuild_plan(false, true, true, image), None);
+        assert_eq!(rebuild_plan(false, true, false, image), Some(image.to_string()));
     }
 
     #[test]
@@ -1034,8 +1068,8 @@ mod tests {
             .expect("git init failed");
         assert!(status.success());
 
-        let mount = share_git_dir(root.path());
-        assert!(mount.is_none());
+        let mounts = share_git_dir(root.path());
+        assert!(mounts.is_empty());
     }
 
     #[test]
@@ -1054,10 +1088,92 @@ mod tests {
             .expect("git init failed");
         assert!(status.success());
 
-        let mount = share_git_dir(root.path()).expect("expected external git dir mount");
+        let mounts = share_git_dir(root.path());
+        assert_eq!(mounts.len(), 1, "expected one external git dir mount");
+        let mount = &mounts[0];
         assert_eq!(mount.source, git_dir.path());
         assert_eq!(mount.target, git_dir.path());
         assert!(!mount.read_only);
         assert!(mount.options.is_empty());
+    }
+
+    #[test]
+    fn share_git_dir_handles_worktrees() {
+        if !git_available() {
+            return;
+        }
+
+        let root = TempDir::new().expect("tempdir");
+        let repo = root.path().join("repo");
+        fs::create_dir(&repo).expect("create repo");
+
+        let status = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .expect("git init failed");
+        assert!(status.success());
+
+        fs::write(repo.join("file.txt"), "hello").expect("write file");
+        let status = Command::new("git")
+            .args(["add", "file.txt"])
+            .current_dir(&repo)
+            .status()
+            .expect("git add failed");
+        assert!(status.success());
+        let status = Command::new("git")
+            .args(["commit", "-q", "-m", "init"])
+            .current_dir(&repo)
+            .env("GIT_AUTHOR_NAME", "giftwrap")
+            .env("GIT_AUTHOR_EMAIL", "giftwrap@example.com")
+            .env("GIT_COMMITTER_NAME", "giftwrap")
+            .env("GIT_COMMITTER_EMAIL", "giftwrap@example.com")
+            .status()
+            .expect("git commit failed");
+        assert!(status.success());
+
+        let worktree = root.path().join("worktree");
+        let status = Command::new("git")
+            .args(["worktree", "add", "-q"])
+            .arg(&worktree)
+            .current_dir(&repo)
+            .status()
+            .expect("git worktree add failed");
+        assert!(status.success());
+
+        let root_real = worktree.canonicalize().expect("canonicalize worktree");
+
+        let git_dir = {
+            let output = Command::new("git")
+                .args(["rev-parse", "--git-dir"])
+                .current_dir(&worktree)
+                .output()
+                .expect("rev-parse --git-dir failed");
+            assert!(output.status.success());
+            let raw = String::from_utf8_lossy(&output.stdout);
+            resolve_real_path(raw.trim(), &worktree)
+        };
+        let common_dir = {
+            let output = Command::new("git")
+                .args(["rev-parse", "--git-common-dir"])
+                .current_dir(&worktree)
+                .output()
+                .expect("rev-parse --git-common-dir failed");
+            assert!(output.status.success());
+            let raw = String::from_utf8_lossy(&output.stdout);
+            resolve_real_path(raw.trim(), &worktree)
+        };
+
+        let mut expected = HashSet::new();
+        if !git_dir.starts_with(&root_real) {
+            expected.insert(git_dir);
+        }
+        if !common_dir.starts_with(&root_real) {
+            expected.insert(common_dir);
+        }
+
+        let mounts = share_git_dir(&worktree);
+        let found: HashSet<PathBuf> = mounts.into_iter().map(|mount| mount.source).collect();
+        assert_eq!(found, expected);
     }
 }

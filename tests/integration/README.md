@@ -20,6 +20,8 @@ Optional environment variables:
 - `GW_IMAGE_ALT`: image used by the image-override case (default: `docker.io/library/debian:bookworm`).
 - `RUN_ID`: override the artifacts run id (default: UTC timestamp).
 
+Fixture args/env entries support `{{RUN_ID}}` expansion to help keep image tags unique per run.
+
 Note: the default image includes `/bin/bash` for the extra-shell case. If you
 override `GW_IMAGE`, ensure the image has `bash` and user-management tools.
 The runner will refuse to start unless it can find a static/musl giftwrap
@@ -39,6 +41,7 @@ Each run writes artifacts under `artifacts/integration/<run-id>/`:
 
 ## Cases
 - `basic-run`: minimal config + `echo ok`.
+- `auto-build`: auto-builds when the image is missing.
 - `image-override`: `--gw-img={{GW_IMAGE_ALT}}` override.
 - `context-tag`: `.gwinclude` + `--gw-use-ctx={{CTX_SHA}}`.
 - `shares`: `extra_shares` mount verification.

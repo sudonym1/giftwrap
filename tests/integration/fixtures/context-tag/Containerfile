@@ -1,0 +1,2 @@
+FROM docker.io/library/debian:bookworm-slim
+COPY data.txt /gw-context-data.txt

@@ -1,0 +1,3 @@
+--
+cat
+/gw-auto-build-marker.txt

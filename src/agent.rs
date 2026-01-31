@@ -140,19 +140,33 @@ fn setup_user(user: &internal::UserSpec) -> Result<(), String> {
         ],
     );
 
+    ensure_group_entry(user)?;
+    ensure_passwd_entry(user)?;
     ensure_home_dir(user)?;
 
     let sudoers_path = Path::new("/etc/sudoers");
     if sudoers_path.exists() {
+        let sudo_name = lookup_username(user.uid).unwrap_or_else(|| user.name.clone());
         run_command_ignore(
             "sed",
             &["-ir", &format!("s/.*{}.*//g", user.name), "/etc/sudoers"],
         );
+        if sudo_name != user.name {
+            run_command_ignore(
+                "sed",
+                &["-ir", &format!("s/.*{}.*//g", sudo_name), "/etc/sudoers"],
+            );
+        }
+        let sudo_target = if sudo_name.is_empty() {
+            user.name.as_str()
+        } else {
+            sudo_name.as_str()
+        };
         let mut sudoers = OpenOptions::new()
             .append(true)
             .open(sudoers_path)
             .map_err(|err| format!("Error: failed to open /etc/sudoers: {err}"))?;
-        writeln!(sudoers, "{} ALL=(ALL) NOPASSWD: ALL", user.name)
+        writeln!(sudoers, "{} ALL=(ALL) NOPASSWD: ALL", sudo_target)
             .map_err(|err| format!("Error: failed to update /etc/sudoers: {err}"))?;
     } else {
         eprintln!("Warning: /etc/sudoers not found; skipping sudoers update");
@@ -163,6 +177,148 @@ fn setup_user(user: &internal::UserSpec) -> Result<(), String> {
 
 fn run_command_ignore(cmd: &str, args: &[&str]) {
     let _ = Command::new(cmd).args(args).status();
+}
+
+fn group_state(contents: &str, gid: u32) -> (bool, bool) {
+    let mut has_gid = false;
+    let mut has_root = false;
+    for line in contents.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split(':');
+        let name = parts.next().unwrap_or("");
+        let _ = parts.next();
+        let line_gid = parts.next().and_then(|val| val.parse::<u32>().ok());
+        if name == "root" || line_gid == Some(0) {
+            has_root = true;
+        }
+        if line_gid == Some(gid) {
+            has_gid = true;
+        }
+        if has_gid && has_root {
+            break;
+        }
+    }
+    (has_gid, has_root)
+}
+
+fn passwd_state(contents: &str, uid: u32) -> (bool, bool) {
+    let mut has_uid = false;
+    let mut has_root = false;
+    for line in contents.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split(':');
+        let name = parts.next().unwrap_or("");
+        let _ = parts.next();
+        let line_uid = parts.next().and_then(|val| val.parse::<u32>().ok());
+        if name == "root" || line_uid == Some(0) {
+            has_root = true;
+        }
+        if line_uid == Some(uid) {
+            has_uid = true;
+        }
+        if has_uid && has_root {
+            break;
+        }
+    }
+    (has_uid, has_root)
+}
+
+fn ensure_group_entry(user: &internal::UserSpec) -> Result<(), String> {
+    let group_path = Path::new("/etc/group");
+    let mut contents = String::new();
+    if group_path.exists() {
+        contents = fs::read_to_string(group_path)
+            .map_err(|err| format!("Error: failed to read /etc/group: {err}"))?;
+    }
+
+    let (has_gid, has_root) = group_state(&contents, user.gid);
+
+    if has_gid {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(group_path)
+        .map_err(|err| format!("Error: failed to open /etc/group: {err}"))?;
+    if !has_root {
+        if !contents.is_empty() && !contents.ends_with('\n') {
+            writeln!(file).map_err(|err| format!("Error: failed to write /etc/group: {err}"))?;
+        }
+        writeln!(file, "root:x:0:")
+            .map_err(|err| format!("Error: failed to write /etc/group: {err}"))?;
+    }
+    writeln!(file, "{}:x:{}:", user.name, user.gid)
+        .map_err(|err| format!("Error: failed to write /etc/group: {err}"))?;
+    Ok(())
+}
+
+fn ensure_passwd_entry(user: &internal::UserSpec) -> Result<(), String> {
+    let passwd_path = Path::new("/etc/passwd");
+    let mut contents = String::new();
+    if passwd_path.exists() {
+        contents = fs::read_to_string(passwd_path)
+            .map_err(|err| format!("Error: failed to read /etc/passwd: {err}"))?;
+    }
+
+    let (has_uid, has_root) = passwd_state(&contents, user.uid);
+
+    if has_uid {
+        return Ok(());
+    }
+
+    let shell = if Path::new("/bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "/bin/sh"
+    };
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(passwd_path)
+        .map_err(|err| format!("Error: failed to open /etc/passwd: {err}"))?;
+    if !has_root {
+        if !contents.is_empty() && !contents.ends_with('\n') {
+            writeln!(file)
+                .map_err(|err| format!("Error: failed to write /etc/passwd: {err}"))?;
+        }
+        writeln!(file, "root:x:0:0:root:/root:{shell}")
+            .map_err(|err| format!("Error: failed to write /etc/passwd: {err}"))?;
+    }
+    writeln!(
+        file,
+        "{}:x:{}:{}:{}:{}:{}",
+        user.name,
+        user.uid,
+        user.gid,
+        user.name,
+        user.home.display(),
+        shell
+    )
+    .map_err(|err| format!("Error: failed to write /etc/passwd: {err}"))?;
+    Ok(())
+}
+
+fn lookup_username(uid: u32) -> Option<String> {
+    unsafe {
+        let pwd = libc::getpwuid(uid as libc::uid_t);
+        if pwd.is_null() {
+            return None;
+        }
+        let name = std::ffi::CStr::from_ptr((*pwd).pw_name)
+            .to_string_lossy()
+            .into_owned();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
+    }
 }
 
 fn ensure_home_dir(user: &internal::UserSpec) -> Result<(), String> {
@@ -334,4 +490,25 @@ fn load_env(path: &Path) -> Result<BTreeMap<String, String>, String> {
         fs::read(path).map_err(|err| format!("Error: failed to read {}: {err}", path.display()))?;
     serde_json::from_slice(&data)
         .map_err(|err| format!("Error: failed to parse {}: {err}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{group_state, passwd_state};
+
+    #[test]
+    fn group_state_detects_root_and_gid() {
+        let contents = "# comment\nroot:x:0:\nwheel:x:10:root\nuser:x:1000:\n";
+        let (has_gid, has_root) = group_state(contents, 1000);
+        assert!(has_gid);
+        assert!(has_root);
+    }
+
+    #[test]
+    fn passwd_state_detects_root_and_uid() {
+        let contents = "root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:User:/home/user:/bin/bash\n";
+        let (has_uid, has_root) = passwd_state(contents, 1000);
+        assert!(has_uid);
+        assert!(has_root);
+    }
 }

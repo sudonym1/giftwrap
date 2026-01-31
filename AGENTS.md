@@ -23,7 +23,13 @@
 ## Build and run
 - Build: `cargo build`
 - Run: `cargo run -- <args>`
-- Tests: `cargo test` (no tests yet).
+- Tests: `cargo test` (unit tests only).
+
+## Agent restrictions (read carefully)
+- NEVER run the integration test suite or any script that invokes `podman`.
+- The agent sandbox cannot run containers; integration runs will hang or fail.
+- Integration runs are manual-only on a developer machine and should write
+  artifacts to `artifacts/integration/` for later inspection.
 
 ## Conventions
 - Keep the Rust CLI name `giftwrap` and stay compatible with existing flag names unless the change is intentional and documented.

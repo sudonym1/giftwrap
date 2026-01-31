@@ -10,33 +10,37 @@
 
 ## Constraints & source of truth
 - Reference behavior: `inspiration/docker-run.py`.
-- Config discovery: search upward for `.giftwrap` or `giftwrap` (replacement for legacy `.docker_build_root` or `docker_build_root`).
+- Config discovery: search upward for `.docker_build_root` or `docker_build_root`.
 - Keep CLI flag names and behavior unless intentionally documented changes.
 
-## High-level module breakdown (single crate)
-- Single crate with shared modules and two binaries: `giftwrap` (host CLI) and `giftwrap-agent` (in-container).
-- `config` module
-  - Config discovery + parsing + validation.
-  - Apply `GW_USER_OPT_{SET,ADD,DEL}_*` environment overrides (replacement for legacy `DR_USER_OPT_{SET,ADD,DEL}_*`), with UUID scoping.
-  - Output: `Config`.
-- `context` module
-  - Git-style file selection + `.gwinclude` (top-level and nested) semantics (replacement for `.dockerignore` negated patterns) + context SHA + SHA file management.
-  - Output: `ContextSha` + file list metadata.
-- `cli` module
-  - Parse `--gw-*` flags (replacement for legacy `--dr-*`) and split docker args vs user command via `--` delimiter.
-  - Output: `CliOptions`, `UserCommand`.
-- `compose` module
-  - Pure builder: map `Config + CliOptions + HostInfo` to a `RunSpec`/`ContainerSpec`.
-  - Handles mounts, extra shares, extra hosts, git-dir sharing, env overrides, workdir/mount mapping, terminfo decisions.
-- `internal` module (agent API definitions)
-  - Shared `RunSpec`/`InternalSpec` types and protocol versioning for agent.
-  - Serialization format and compatibility rules.
-- `persist` module
-  - Persisted environment read/write format and compatibility.
-- `exec` module
-  - Side effects: prelaunch hook, rebuild/build, exec/print, host probes (isatty, ARG_MAX, infocmp, git).
-- `main` module (binaries)
-  - Orchestrates flow only; no business logic in the binary entrypoints.
+## High-level crate breakdown (two crates)
+- Workspace with two crates:
+  - `giftwrap` (host CLI, standard libc target)
+  - `giftwrap-agent` (in-container, musl-static target)
+- `giftwrap` crate modules:
+  - `config`
+    - Config discovery + parsing + validation.
+    - Apply `GW_USER_OPT_{SET,ADD,DEL}_*` environment overrides (replacement for legacy `DR_USER_OPT_{SET,ADD,DEL}_*`), with UUID scoping.
+    - Output: `Config`.
+  - `context`
+    - Git-style file selection + `.gwinclude` (top-level and nested) semantics (replacement for `.dockerignore` negated patterns) + context SHA + SHA file management.
+    - Output: `ContextSha` + file list metadata.
+  - `cli`
+    - Parse `--gw-*` flags (replacement for legacy `--dr-*`) and split docker args vs user command via `--` delimiter.
+    - Output: `CliOptions`, `UserCommand`.
+  - `compose`
+    - Pure builder: map `Config + CliOptions + HostInfo` to a `RunSpec`/`ContainerSpec`.
+    - Handles mounts, extra shares, extra hosts, git-dir sharing, env overrides, workdir/mount mapping, terminfo decisions.
+  - `internal` (agent API definitions)
+    - Shared `RunSpec`/`InternalSpec` types and protocol versioning for agent (kept in sync with agent).
+    - Serialization format and compatibility rules.
+  - `persist`
+    - Persisted environment read/write format and compatibility.
+  - `exec`
+    - Side effects: prelaunch hook, rebuild/build, exec/print, host probes (isatty, ARG_MAX, infocmp, git).
+- `giftwrap-agent` crate modules:
+  - `internal` (agent API definitions mirrored from `giftwrap`).
+  - Agent runtime modules for user setup, env handling, and exec.
 
 ## Remove injected Python; replace with baked-in agent
 ### Decision
@@ -83,12 +87,18 @@
 - Preserve shared mount semantics and optional git-dir sharing.
 - Preserve persisted environment behavior (new implementation but same semantics).
 
+## Current status
+- Workspace split into two crates: `giftwrap` (host CLI) and `giftwrap-agent` (agent).
+- Shared internal data models defined and mirrored in the agent crate.
+- Config discovery/parsing + GW_USER_OPT_* environment overrides implemented.
+- CLI flag parsing implemented (including `--` split handling).
+
 ## Next steps (implementation sequence)
-1) Define shared data models: `Config`, `CliOptions`, `RunSpec`, `InternalSpec`, `ContainerSpec`.
-2) Implement `config` and `cli` modules to match legacy behavior.
-3) Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
-4) Implement `internal` module and skeleton `giftwrap-agent` (musl static build).
-5) Implement `podman_cli` module and wire into `exec`.
-6) Replace old docker CLI invocation with Podman CLI `run`.
-7) Add PTY bridging and resize handling for interactive mode.
-8) Validate parity with the Python script on key flows.
+- [x] Define shared data models: `Config`, `CliOptions`, `RunSpec`, `InternalSpec`, `ContainerSpec`.
+- [x] Implement `config` and `cli` modules to match legacy behavior.
+- [ ] Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
+- [ ] Implement agent runtime pieces (user setup, env handling, exec) and musl-static build config.
+- [ ] Implement `podman_cli` module and wire into `exec`.
+- [ ] Replace old docker CLI invocation with Podman CLI `run`.
+- [ ] Add PTY bridging and resize handling for interactive mode.
+- [ ] Validate parity with the Python script on key flows.

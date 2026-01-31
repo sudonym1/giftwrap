@@ -1,16 +1,16 @@
 # giftwrap modernization plan (from conversation)
 
 ## Goals
-- Preserve user-visible behavior from `inspiration/docker-run.py` while modernizing implementation in Rust.
+- Preserve user-visible behavior from the legacy script in `inspiration/` while modernizing implementation in Rust.
 - Remove the inline Python script injection into the container.
-- Use the Podman CLI (not HTTP) for container lifecycle, always via `podman run`.
-- Support fully interactive mode by letting Podman own the TTY (`exec podman run -it`).
+- Use the container runtime CLI (not HTTP) for container lifecycle, always via `podman run`.
+- Support fully interactive mode by letting the runtime own the TTY (`exec podman run -it`).
 - Ensure commands launched inside the container are seamlessly usable (e.g., `vim` feels like `podman run -it`).
 - Provide a default in-container agent that is baked into the image, is musl-static, and is user-extensible.
 
 ## Constraints & source of truth
-- Reference behavior: `inspiration/docker-run.py`.
-- Config discovery: search upward for `.docker_build_root` or `docker_build_root`.
+- Reference behavior: legacy script in `inspiration/`.
+- Config discovery: search upward for `.giftwrap` or `giftwrap`.
 - Keep CLI flag names and behavior unless intentionally documented changes.
 
 ## High-level crate breakdown (two crates)
@@ -23,10 +23,10 @@
     - Apply `GW_USER_OPT_{SET,ADD,DEL}_*` environment overrides (replacement for legacy `DR_USER_OPT_{SET,ADD,DEL}_*`), with UUID scoping.
     - Output: `Config`.
   - `context`
-    - Git-style file selection + `.gwinclude` (top-level and nested) semantics (replacement for `.dockerignore` negated patterns) + context SHA + SHA file management.
+    - Git-style file selection + `.gwinclude` (top-level and nested) semantics + context SHA + SHA file management.
     - Output: `ContextSha` + file list metadata.
   - `cli`
-    - Parse `--gw-*` flags (replacement for legacy `--dr-*`) and split docker args vs user command via `--` delimiter.
+    - Parse `--gw-*` flags (replacement for legacy `--dr-*`) and split runtime args vs user command via `--` delimiter.
     - Output: `CliOptions`, `UserCommand`.
   - `compose`
     - Pure builder: map `Config + CliOptions + HostInfo` to a `RunSpec`/`ContainerSpec`.
@@ -62,28 +62,28 @@
   - Replacing the agent with a custom build using the same API, or
   - Adding plugins discovered by the default agent.
 
-## Podman integration: CLI-based
+## Container runtime integration: CLI-based
 ### Decision
-- Use Podman CLI exclusively.
-- No Podman REST API or libpod bindings.
+- Use the runtime CLI exclusively.
+- No runtime REST API or libpod bindings.
 
-### Podman CLI wrapper
-- `podman_cli` module provides:
+### Runtime CLI wrapper
+- Runtime CLI wrapper provides:
   - `build_image`, `inspect_image`, `run`.
-- Compose Podman CLI args, and `exec` Podman so it directly owns stdin/stdout/stderr.
+- Compose runtime CLI args, and `exec` the runtime so it directly owns stdin/stdout/stderr.
 - Always include `--rm` with `podman run`.
 - Clear error mapping to user-visible messages before `exec`.
 
 ### Interactive mode (TTY ownership via exec)
-- Always `exec` Podman (`podman run -it`) so it directly owns the TTY/FDS.
-- Let Podman handle raw mode, SIGWINCH, and resize propagation.
-- Preserve control sequences and signals (Ctrl+C, Ctrl+Z, etc.) via Podman’s native TTY handling.
-- If not a TTY, fall back to non-interactive `podman` invocation.
+- Always `exec` the runtime (`podman run -it`) so it directly owns the TTY/FDS.
+- Let the runtime handle raw mode, SIGWINCH, and resize propagation.
+- Preserve control sequences and signals (Ctrl+C, Ctrl+Z, etc.) via the runtime’s native TTY handling.
+- If not a TTY, fall back to non-interactive runtime invocation.
 
 ## Behavior parity targets
 - Preserve all `--gw-*` flags (replacement for legacy `--dr-*`):
   - print, ctx, print-image, use-ctx, img, rebuild, show-config, extra-args, help.
-- Maintain build-context SHA tagging behavior with git-style file selection and `.gwinclude` semantics (replacement for `.dockerignore` negated rules).
+- Maintain build-context SHA tagging behavior with `.gwinclude` selection rules.
 - Preserve shared mount semantics and optional git-dir sharing.
 - Preserve persisted environment behavior (new implementation but same semantics).
 
@@ -92,16 +92,16 @@
 - Shared internal data models defined and mirrored in the agent crate.
 - Config discovery/parsing + GW_USER_OPT_* environment overrides implemented.
 - CLI flag parsing implemented (including `--` split handling).
-- Context module implemented (gwinclude/dockerignore selection + SHA + sha-file reuse).
-- Podman CLI wrapper implemented with build/inspect/run and exec wiring.
-- CLI now composes a minimal Podman run from config/flags and executes it.
+- Context module implemented (gwinclude-only selection + SHA + sha-file reuse).
+- Config discovery now uses `.giftwrap` / `giftwrap`, and config keys are prefixed with `gw` where applicable.
+- Runtime CLI wrapper implemented with build/inspect/run and exec wiring.
+- CLI now composes a minimal runtime run from config/flags and executes it.
 
 ## Next steps (implementation sequence)
 - [x] Define shared data models: `Config`, `CliOptions`, `RunSpec`, `InternalSpec`, `ContainerSpec`.
 - [x] Implement `config` and `cli` modules to match legacy behavior.
 - [x] Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
 - [ ] Implement agent runtime pieces (user setup, env handling, exec) and musl-static build config.
-- [x] Implement `podman_cli` module and wire into `exec`.
-- [x] Replace old docker CLI invocation with Podman CLI `run`.
-- [ ] Add PTY bridging and resize handling for interactive mode.
+- [x] Implement runtime CLI module and wire into `exec`.
+- [x] Replace old runtime CLI invocation with `podman run`.
 - [ ] Validate parity with the Python script on key flows.

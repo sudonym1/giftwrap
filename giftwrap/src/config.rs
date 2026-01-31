@@ -38,7 +38,7 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-const CONFIG_NAMES: [&str; 2] = [".docker_build_root", "docker_build_root"];
+const CONFIG_NAMES: [&str; 2] = [".giftwrap", "giftwrap"];
 const ENV_SET_PREFIX: &str = "GW_USER_OPT_SET_";
 const ENV_ADD_PREFIX: &str = "GW_USER_OPT_ADD_";
 const ENV_DEL_PREFIX: &str = "GW_USER_OPT_DEL_";
@@ -61,9 +61,9 @@ pub fn load_from(start_dir: &Path) -> Result<Config, ConfigError> {
 
     apply_env_overrides(&mut params, uuid.as_deref())?;
 
-    if !params.contains_key("docker_container") {
+    if !params.contains_key("gw_container") {
         return Err(ConfigError::new(format!(
-            "Error: docker_container must be specified in {}",
+            "Error: gw_container must be specified in {}",
             config_path.display()
         )));
     }
@@ -91,7 +91,7 @@ fn discover_config(start_dir: &Path) -> Result<(PathBuf, PathBuf), ConfigError> 
     while cwd != root {
         for name in CONFIG_NAMES {
             let candidate = cwd.join(name);
-            if candidate.exists() {
+            if candidate.is_file() {
                 return Ok((cwd, candidate));
             }
         }

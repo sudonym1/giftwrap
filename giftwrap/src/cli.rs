@@ -23,8 +23,8 @@ pub struct CliOptions {
     pub rebuild: bool,
     /// Extra args supplied via --gw-extra-args.
     pub extra_args: Vec<String>,
-    /// Docker/Podman args provided before the `--` delimiter.
-    pub docker_args: Vec<String>,
+    /// Runtime args provided before the `--` delimiter.
+    pub runtime_args: Vec<String>,
 }
 
 /// User command captured after the `--` delimiter (or remaining args).
@@ -60,7 +60,7 @@ pub fn parse_args(args: &[String]) -> Result<(CliOptions, UserCommand), CliError
     let mut override_image = None;
     let mut rebuild = false;
     let mut extra_args = Vec::new();
-    let mut docker_args = Vec::new();
+    let mut runtime_args = Vec::new();
 
     let mut idx = 0;
     let mut terminal_action = false;
@@ -112,7 +112,7 @@ pub fn parse_args(args: &[String]) -> Result<(CliOptions, UserCommand), CliError
     let user_cmd = if terminal_action {
         Vec::new()
     } else if let Some(pos) = remaining.iter().position(|arg| arg == "--") {
-        docker_args = remaining[..pos].to_vec();
+        runtime_args = remaining[..pos].to_vec();
         remaining[pos + 1..].to_vec()
     } else {
         remaining
@@ -125,7 +125,7 @@ pub fn parse_args(args: &[String]) -> Result<(CliOptions, UserCommand), CliError
             override_image,
             rebuild,
             extra_args,
-            docker_args,
+            runtime_args,
         },
         UserCommand { argv: user_cmd },
     ))

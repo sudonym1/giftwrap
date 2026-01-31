@@ -32,13 +32,13 @@ pub fn build_image(image: &str, context_dir: &Path) -> Result<(), PodmanError> {
         .arg(image)
         .arg(context_dir)
         .status()
-        .map_err(|err| PodmanError::new(format!("Error: failed to launch podman build: {err}")))?;
+        .map_err(|err| PodmanError::new(format!("Error: failed to launch runtime build: {err}")))?;
 
     if status.success() {
         Ok(())
     } else {
         Err(PodmanError::new(format!(
-            "Error: podman build failed (exit {})",
+            "Error: runtime build failed (exit {})",
             format_exit_status(&status)
         )))
     }
@@ -52,7 +52,7 @@ pub fn inspect_image(image: &str) -> Result<bool, PodmanError> {
         .status()
         .map_err(|err| {
             PodmanError::new(format!(
-                "Error: failed to launch podman image exists: {err}"
+                "Error: failed to launch runtime image exists: {err}"
             ))
         })?;
 
@@ -60,7 +60,7 @@ pub fn inspect_image(image: &str) -> Result<bool, PodmanError> {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
         _ => Err(PodmanError::new(format!(
-            "Error: podman image exists failed (exit {})",
+            "Error: runtime image exists failed (exit {})",
             format_exit_status(&status)
         ))),
     }
@@ -150,14 +150,14 @@ pub fn exec_run(spec: &ContainerSpec) -> Result<(), PodmanError> {
     let args = build_run_args(spec)?;
     let err = Command::new("podman").args(args).exec();
     Err(PodmanError::new(format!(
-        "Error: failed to exec podman run: {err}"
+        "Error: failed to exec runtime run: {err}"
     )))
 }
 
 #[cfg(not(unix))]
 pub fn exec_run(_spec: &ContainerSpec) -> Result<(), PodmanError> {
     Err(PodmanError::new(
-        "Error: podman exec is only supported on unix platforms",
+        "Error: runtime exec is only supported on unix platforms",
     ))
 }
 

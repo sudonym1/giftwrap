@@ -11,13 +11,6 @@ pub struct ContextSha {
     pub sha: String,
     pub files: Vec<String>,
     pub sha_file: PathBuf,
-    pub mode: ContextMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContextMode {
-    GwInclude,
-    DockerIgnore,
 }
 
 #[derive(Debug)]
@@ -52,13 +45,6 @@ struct GwPattern {
     tokens: Vec<Token>,
 }
 
-#[derive(Clone, Debug)]
-struct DockerPattern {
-    raw: String,
-    tokens: Vec<Token>,
-    dir_only: bool,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Token {
     Star,
@@ -76,7 +62,7 @@ pub fn load_from_config(
     };
     if ctx.len() != 1 {
         return Err(ContextError::new(
-            "Error: version_by_build_context requires a .gwinclude (or legacy .dockerignore) file",
+            "Error: version_by_build_context requires a .gwinclude file",
         ));
     }
 
@@ -91,11 +77,7 @@ pub fn build_context_sha(root_dir: &Path, sha_file: &Path) -> Result<ContextSha,
     } else {
         root_dir.join(sha_file)
     };
-    let mode = detect_context_mode(root_dir)?;
-    let files = match mode {
-        ContextMode::GwInclude => build_gwinclude_file_list(root_dir)?,
-        ContextMode::DockerIgnore => build_dockerignore_file_list(root_dir)?,
-    };
+    let files = build_gwinclude_file_list(root_dir)?;
 
     let dirty = is_sha_file_dirty(&sha_file, &files, root_dir)?;
     let sha = if dirty {
@@ -110,26 +92,16 @@ pub fn build_context_sha(root_dir: &Path, sha_file: &Path) -> Result<ContextSha,
         sha,
         files,
         sha_file,
-        mode,
     })
-}
-
-fn detect_context_mode(root_dir: &Path) -> Result<ContextMode, ContextError> {
-    let gwinclude = root_dir.join(".gwinclude");
-    if gwinclude.exists() {
-        return Ok(ContextMode::GwInclude);
-    }
-    let dockerignore = root_dir.join(".dockerignore");
-    if dockerignore.exists() {
-        return Ok(ContextMode::DockerIgnore);
-    }
-    Err(ContextError::new(
-        "Error: version_by_build_context requires a .gwinclude (or legacy .dockerignore) file",
-    ))
 }
 
 fn build_gwinclude_file_list(root_dir: &Path) -> Result<Vec<String>, ContextError> {
     let (files, gwincludes) = collect_files(root_dir)?;
+    if gwincludes.is_empty() {
+        return Err(ContextError::new(
+            "Error: version_by_build_context requires a .gwinclude file",
+        ));
+    }
     let patterns = parse_gwinclude_files(root_dir, &gwincludes)?;
 
     let mut selected = BTreeSet::new();
@@ -149,36 +121,8 @@ fn build_gwinclude_file_list(root_dir: &Path) -> Result<Vec<String>, ContextErro
         }
     }
 
-    let dockerfile = root_dir.join("Dockerfile");
-    if dockerfile.is_file() {
-        selected.insert("Dockerfile".to_string());
-    }
-
     for gw in &gwincludes {
         selected.insert(path_to_slash(gw));
-    }
-
-    Ok(selected.into_iter().collect())
-}
-
-fn build_dockerignore_file_list(root_dir: &Path) -> Result<Vec<String>, ContextError> {
-    let dockerignore = root_dir.join(".dockerignore");
-    let patterns = parse_dockerignore(&dockerignore)?;
-    let (files, _) = collect_files(root_dir)?;
-
-    let mut selected = BTreeSet::new();
-    for rel_path in &files {
-        if dockerignore_includes(rel_path, &patterns) {
-            selected.insert(path_to_slash(rel_path));
-        }
-    }
-
-    let dockerfile = root_dir.join("Dockerfile");
-    if dockerfile.is_file() {
-        selected.insert("Dockerfile".to_string());
-    }
-    if dockerignore.is_file() {
-        selected.insert(".dockerignore".to_string());
     }
 
     Ok(selected.into_iter().collect())
@@ -304,61 +248,6 @@ fn parse_gwinclude_files(
     Ok(patterns)
 }
 
-fn parse_dockerignore(dockerignore: &Path) -> Result<Vec<DockerPattern>, ContextError> {
-    let content = fs::read_to_string(dockerignore).map_err(|err| {
-        ContextError::new(format!(
-            "Error: failed to read dockerignore {}: {err}",
-            dockerignore.display()
-        ))
-    })?;
-    let mut lines = content.lines();
-    let first = lines.next().ok_or_else(|| {
-        ContextError::new(
-            "Error: docker ignore must start with '*', each following line must start with '!'",
-        )
-    })?;
-    if first != "*" {
-        return Err(ContextError::new(
-            "Error: docker ignore must start with '*', each following line must start with '!'",
-        ));
-    }
-
-    let mut patterns = Vec::new();
-    for raw_line in lines {
-        if !raw_line.starts_with('!') {
-            return Err(ContextError::new(
-                "Error: docker ignore must start with '*', each following line must start with '!'",
-            ));
-        }
-        let mut pattern = raw_line[1..].trim().to_string();
-        if pattern.is_empty() {
-            return Err(ContextError::new(
-                "Error: docker ignore must start with '*', each following line must start with '!'",
-            ));
-        }
-        if let Some(rest) = pattern.strip_prefix('/') {
-            pattern = rest.to_string();
-        }
-        let dir_only = pattern.ends_with('/');
-        if dir_only {
-            pattern.truncate(pattern.trim_end_matches('/').len());
-        }
-        if pattern.is_empty() {
-            return Err(ContextError::new(
-                "Error: docker ignore must start with '*', each following line must start with '!'",
-            ));
-        }
-        let tokens = tokenize(&pattern);
-        patterns.push(DockerPattern {
-            raw: pattern,
-            tokens,
-            dir_only,
-        });
-    }
-
-    Ok(patterns)
-}
-
 fn gw_pattern_matches(pattern: &GwPattern, rel_path: &Path) -> bool {
     let rel_str = path_to_slash(rel_path);
     let components = split_components(&rel_str);
@@ -388,37 +277,6 @@ fn gw_pattern_matches(pattern: &GwPattern, rel_path: &Path) -> bool {
             .iter()
             .any(|component| glob_match_tokens(&pattern.tokens, component))
     }
-}
-
-fn dockerignore_includes(rel_path: &Path, patterns: &[DockerPattern]) -> bool {
-    if patterns.is_empty() {
-        return false;
-    }
-    let rel_str = path_to_slash(rel_path);
-    let components = split_components(&rel_str);
-    let mut prefixes = Vec::new();
-    for idx in 1..=components.len() {
-        prefixes.push(join_components(&components[..idx]));
-    }
-    let mut dir_prefixes = Vec::new();
-    if components.len() > 1 {
-        for idx in 1..components.len() {
-            dir_prefixes.push(join_components(&components[..idx]));
-        }
-    }
-    for pattern in patterns {
-        let candidates = if pattern.dir_only {
-            &dir_prefixes
-        } else {
-            &prefixes
-        };
-        for candidate in candidates.iter() {
-            if glob_match_tokens(&pattern.tokens, candidate) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 fn tokenize(pattern: &str) -> Vec<Token> {

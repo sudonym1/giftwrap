@@ -11,7 +11,7 @@ pub struct RunSpec {
     pub internal: InternalSpec,
 }
 
-/// Container runtime inputs for `podman run`.
+/// Container runtime inputs for a run invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerSpec {
     pub image: String,

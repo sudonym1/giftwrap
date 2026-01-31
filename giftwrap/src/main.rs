@@ -53,9 +53,9 @@ fn run() -> Result<(), String> {
     }
 
     let mut image = params
-        .get("docker_container")
+        .get("gw_container")
         .and_then(|vals| vals.first())
-        .ok_or_else(|| "Error: docker_container must be specified".to_string())?
+        .ok_or_else(|| "Error: gw_container must be specified".to_string())?
         .to_string();
     if let Some(sha) = &ctx_sha {
         image = format!("{image}:{sha}");
@@ -90,7 +90,7 @@ fn run() -> Result<(), String> {
 
     let mut env_overrides = BTreeMap::new();
     env_overrides.insert(
-        "DR_BUILD_ROOT".to_string(),
+        "GW_BUILD_ROOT".to_string(),
         root_dir.to_string_lossy().into_owned(),
     );
 
@@ -148,8 +148,8 @@ fn run() -> Result<(), String> {
 
     let mut extra_args = cli_opts.extra_args.clone();
     let mut config_extra_args = params.get("extra_args").cloned().unwrap_or_default();
-    if !cli_opts.docker_args.is_empty() {
-        config_extra_args.extend(cli_opts.docker_args.clone());
+    if !cli_opts.runtime_args.is_empty() {
+        config_extra_args.extend(cli_opts.runtime_args.clone());
     }
     extra_args.extend(config_extra_args);
 
@@ -189,14 +189,14 @@ fn print_help() {
     println!(
         r#"
 GW Flags:
-    print: print the podman command instead of executing it
+    print: print the runtime command instead of executing it
     ctx: print the context sha
     print-image: print the image
     use-ctx: force a particular context sha
     img: force a particular image
     rebuild: rebuild the container image
     show-config: dump the parameters
-    extra-args: add extra args to the podman invocation
+    extra-args: add extra args to the runtime invocation
 "#
     );
 }

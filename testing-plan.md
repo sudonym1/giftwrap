@@ -61,7 +61,7 @@ coverage one suite at a time with clear boundaries and fixtures.
 - [x] Suite 1: CLI parsing (tests added in `src/cli.rs`, `cargo test` passes)
 - [x] Suite 2: Runtime arg composition (tests added in `src/podman_cli.rs`, `cargo test` passes)
 - [ ] Suite 3: Hostname and path helpers
-- [ ] Suite 4: Config discovery
+- [x] Suite 4: Config discovery
 - [ ] Suite 5: Config parsing + env overrides
 - [ ] Suite 6: Context hashing
 - [ ] Suite 7: Image/tag selection

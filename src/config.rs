@@ -191,3 +191,64 @@ fn handle_env_opt(key: &str, uuid: Option<&str>) -> Option<(EnvOpt, String)> {
 
     Some((op, rest[expected.len()..].to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::discover_config;
+    use std::fs;
+    use std::path::Path;
+
+    fn write_config(dir: &Path, name: &str) {
+        let path = dir.join(name);
+        fs::write(path, "gw_container test").unwrap();
+    }
+
+    #[test]
+    fn discover_config_finds_dot_giftwrap_in_start_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        write_config(temp.path(), ".giftwrap");
+
+        let (root_dir, config_path) = discover_config(temp.path()).unwrap();
+        let canonical_root = temp.path().canonicalize().unwrap();
+
+        assert_eq!(root_dir, canonical_root);
+        assert_eq!(config_path, canonical_root.join(".giftwrap"));
+    }
+
+    #[test]
+    fn discover_config_walks_up_to_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        write_config(temp.path(), "giftwrap");
+
+        let nested = temp.path().join("child/grandchild");
+        fs::create_dir_all(&nested).unwrap();
+
+        let (root_dir, config_path) = discover_config(&nested).unwrap();
+        let canonical_root = temp.path().canonicalize().unwrap();
+
+        assert_eq!(root_dir, canonical_root);
+        assert_eq!(config_path, canonical_root.join("giftwrap"));
+    }
+
+    #[test]
+    fn discover_config_prefers_dot_giftwrap_over_giftwrap() {
+        let temp = tempfile::tempdir().unwrap();
+        write_config(temp.path(), ".giftwrap");
+        write_config(temp.path(), "giftwrap");
+
+        let (root_dir, config_path) = discover_config(temp.path()).unwrap();
+        let canonical_root = temp.path().canonicalize().unwrap();
+
+        assert_eq!(root_dir, canonical_root);
+        assert_eq!(config_path, canonical_root.join(".giftwrap"));
+    }
+
+    #[test]
+    fn discover_config_errors_when_missing() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let err = discover_config(temp.path()).unwrap_err();
+
+        assert_eq!(err.to_string(), "Error: never found a config file");
+    }
+}

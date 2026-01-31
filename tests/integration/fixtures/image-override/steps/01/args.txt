@@ -1,0 +1,4 @@
+--gw-img={{GW_IMAGE_ALT}}
+--
+echo
+override-ok

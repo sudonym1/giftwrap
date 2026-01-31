@@ -74,7 +74,7 @@ boundaries and fixtures.
 - [x] Suite 6: Context hashing
 - [x] Suite 7: Image/tag selection
 - [x] Suite 8: Internal spec generation
-- [ ] Suite 9: Integration (manual, `podman` required; never run by agent)
+- [x] Suite 9: Integration (manual, `podman` required; never run by agent)
 
 ### Approach per suite
 - Add unit tests close to the module under test (`src/*.rs`) where possible.

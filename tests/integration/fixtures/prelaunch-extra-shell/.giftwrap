@@ -1,0 +1,4 @@
+gw_container docker.io/library/debian:bookworm-slim
+prelaunch_hook /bin/sh hook.sh
+extra_shell extra-shell.sh
+prefix_cmd echo prefix-cmd

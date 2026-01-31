@@ -1,0 +1,3 @@
+--
+ls
+{{GIT_DIR_PATH}}

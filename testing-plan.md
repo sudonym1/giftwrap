@@ -70,10 +70,10 @@ boundaries and fixtures.
 - [x] Suite 2: Runtime arg composition (tests added in `src/podman_cli.rs`, `cargo test` passes)
 - [x] Suite 3: Hostname and path helpers
 - [x] Suite 4: Config discovery
-- [ ] Suite 5: Config parsing + env overrides
+- [x] Suite 5: Config parsing + env overrides
 - [x] Suite 6: Context hashing
-- [ ] Suite 7: Image/tag selection
-- [ ] Suite 8: Internal spec generation
+- [x] Suite 7: Image/tag selection
+- [x] Suite 8: Internal spec generation
 - [ ] Suite 9: Integration (manual, `podman` required; never run by agent)
 
 ### Approach per suite

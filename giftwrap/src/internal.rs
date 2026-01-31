@@ -1,18 +1,20 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 /// Protocol version for host <-> agent communication.
 pub const INTERNAL_SPEC_VERSION: u32 = 1;
 
 /// Fully composed run specification produced by the host.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunSpec {
     pub container: ContainerSpec,
     pub internal: InternalSpec,
 }
 
 /// Container runtime inputs for a run invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerSpec {
     pub image: String,
     pub hostname: Option<String>,
@@ -32,7 +34,7 @@ pub struct ContainerSpec {
 }
 
 /// Bind mount definition for the container.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mount {
     pub source: PathBuf,
     pub target: PathBuf,
@@ -41,7 +43,7 @@ pub struct Mount {
 }
 
 /// Spec passed to the in-container agent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InternalSpec {
     pub protocol_version: u32,
     pub workdir: PathBuf,
@@ -52,9 +54,12 @@ pub struct InternalSpec {
     pub terminfo: Option<TerminfoSpec>,
     pub command: Vec<String>,
     pub shell: Option<String>,
+    pub extra_shell: Option<PathBuf>,
+    pub prefix_cmd: Vec<String>,
+    pub prefix_cmd_quiet: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserSpec {
     pub name: String,
     pub uid: u32,
@@ -62,14 +67,14 @@ pub struct UserSpec {
     pub home: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistEnvSpec {
     pub path: PathBuf,
     pub restore: bool,
     pub save: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminfoSpec {
     pub term: String,
     pub data: Vec<u8>,

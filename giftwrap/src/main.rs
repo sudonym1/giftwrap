@@ -5,6 +5,7 @@ mod exec;
 mod internal;
 mod podman_cli;
 
+use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -98,9 +99,11 @@ fn run() -> Result<(), String> {
     let stdout_tty = std::io::stdout().is_terminal();
     let interactive = true;
     let tty = stdin_tty && stdout_tty;
+    let mut terminfo = None;
     if tty {
         if let Ok(term) = env::var("TERM") {
-            env_overrides.insert("TERM".to_string(), term);
+            env_overrides.insert("TERM".to_string(), term.clone());
+            terminfo = Some(load_terminfo(&term)?);
         }
     }
 
@@ -146,6 +149,18 @@ fn run() -> Result<(), String> {
         }
     }
 
+    let mut extra_shell_path = None;
+    if let Some(extra_shell) = params.get("extra_shell").and_then(|vals| vals.first()) {
+        let resolved = resolve_path(extra_shell, &root_dir);
+        mounts.push(internal::Mount {
+            source: resolved.clone(),
+            target: resolved.clone(),
+            read_only: false,
+            options: Vec::new(),
+        });
+        extra_shell_path = Some(resolved);
+    }
+
     let mut extra_args = cli_opts.extra_args.clone();
     let mut config_extra_args = params.get("extra_args").cloned().unwrap_or_default();
     if !cli_opts.runtime_args.is_empty() {
@@ -153,13 +168,62 @@ fn run() -> Result<(), String> {
     }
     extra_args.extend(config_extra_args);
 
+    let uid = unsafe { libc::getuid() } as u32;
+    let gid = unsafe { libc::getgid() } as u32;
+    let user_name = resolve_username(uid);
+    let user_home = build_home(&user_name);
+
+    let persist_env = params
+        .get("persist_environment")
+        .and_then(|vals| vals.first())
+        .map(|path| internal::PersistEnvSpec {
+            path: resolve_real_path(path, &root_dir),
+            restore: true,
+            save: true,
+        });
+
+    let internal_spec = internal::InternalSpec {
+        protocol_version: internal::INTERNAL_SPEC_VERSION,
+        workdir: cd_to.clone(),
+        root_dir: root_dir.clone(),
+        user: internal::UserSpec {
+            name: user_name,
+            uid,
+            gid,
+            home: user_home,
+        },
+        env_overrides: env_overrides.clone(),
+        persist_env,
+        terminfo,
+        command: user_cmd.argv.clone(),
+        shell: None,
+        extra_shell: extra_shell_path,
+        prefix_cmd: params.get("prefix_cmd").cloned().unwrap_or_default(),
+        prefix_cmd_quiet: params
+            .get("prefix_cmd_quiet")
+            .cloned()
+            .unwrap_or_default(),
+    };
+
+    let internal_spec_json = serde_json::to_string(&internal_spec)
+        .map_err(|err| format!("Error: failed to serialize internal spec: {err}"))?;
+
+    let agent_path = params
+        .get("gw_agent")
+        .and_then(|vals| vals.first())
+        .map(|val| val.to_string())
+        .unwrap_or_else(|| "/usr/local/bin/giftwrap-agent".to_string());
+
+    let mut container_env = BTreeMap::new();
+    container_env.insert("GW_INTERNAL_SPEC".to_string(), internal_spec_json);
+
     let hostname = mkhostname(&image);
     let container_spec = internal::ContainerSpec {
         image,
         hostname: Some(hostname),
         mounts,
-        env: env_overrides,
-        workdir: Some(cd_to),
+        env: container_env,
+        workdir: None,
         user: Some("root".to_string()),
         extra_hosts: params.get("extra_hosts").cloned().unwrap_or_default(),
         privileged: true,
@@ -167,8 +231,8 @@ fn run() -> Result<(), String> {
         remove: true,
         interactive,
         tty,
-        entrypoint: None,
-        command: user_cmd.argv.clone(),
+        entrypoint: Some(vec![agent_path]),
+        command: Vec::new(),
         extra_args,
     };
 
@@ -306,6 +370,61 @@ fn abs_path(path: &str, root_dir: &Path) -> PathBuf {
     } else {
         root_dir.join(candidate)
     }
+}
+
+fn resolve_path(path: &str, root_dir: &Path) -> PathBuf {
+    abs_path(path, root_dir)
+}
+
+fn resolve_real_path(path: &str, root_dir: &Path) -> PathBuf {
+    let candidate = abs_path(path, root_dir);
+    std::fs::canonicalize(&candidate).unwrap_or(candidate)
+}
+
+fn resolve_username(uid: u32) -> String {
+    if let Ok(name) = std::env::var("USER") {
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    if let Ok(name) = std::env::var("LOGNAME") {
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    unsafe {
+        let pwd = libc::getpwuid(uid as libc::uid_t);
+        if !pwd.is_null() {
+            let name = CStr::from_ptr((*pwd).pw_name)
+                .to_string_lossy()
+                .into_owned();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    uid.to_string()
+}
+
+fn build_home(user: &str) -> PathBuf {
+    PathBuf::from(format!("/tmp/dr-tmp-home-{user}/{user}"))
+}
+
+fn load_terminfo(term: &str) -> Result<internal::TerminfoSpec, String> {
+    let output = Command::new("infocmp")
+        .arg(term)
+        .output()
+        .map_err(|err| format!("Error: failed to run infocmp: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Error: infocmp failed (exit {})",
+            format_exit_status(&output.status)
+        ));
+    }
+    Ok(internal::TerminfoSpec {
+        term: term.to_string(),
+        data: output.stdout,
+    })
 }
 
 fn format_exit_status(status: &std::process::ExitStatus) -> String {

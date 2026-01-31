@@ -194,13 +194,59 @@ fn handle_env_opt(key: &str, uuid: Option<&str>) -> Option<(EnvOpt, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::discover_config;
+    use super::{apply_env_overrides, discover_config, load_from, parse_config};
+    use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().expect("env lock poisoned")
+    }
+
+    struct EnvVarGuard {
+        key: String,
+        prior: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let prior = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                key: key.to_string(),
+                prior,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.prior.take() {
+                unsafe {
+                    std::env::set_var(&self.key, value);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(&self.key);
+                }
+            }
+        }
+    }
 
     fn write_config(dir: &Path, name: &str) {
         let path = dir.join(name);
         fs::write(path, "gw_container test").unwrap();
+    }
+
+    fn write_config_contents(dir: &Path, name: &str, contents: &str) {
+        let path = dir.join(name);
+        fs::write(path, contents).unwrap();
     }
 
     #[test]
@@ -250,5 +296,176 @@ mod tests {
         let err = discover_config(temp.path()).unwrap_err();
 
         assert_eq!(err.to_string(), "Error: never found a config file");
+    }
+
+    #[test]
+    fn parse_config_skips_comments_and_parses_values() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("giftwrap");
+        fs::write(
+            &path,
+            r#"
+# comment
+gw_container test
+extra_args "one two" three
+empty_key
+"#,
+        )
+        .unwrap();
+
+        let params = parse_config(&path).unwrap();
+
+        assert_eq!(
+            params.get("gw_container").unwrap(),
+            &vec!["test".to_string()]
+        );
+        assert_eq!(
+            params.get("extra_args").unwrap(),
+            &vec!["one two".to_string(), "three".to_string()]
+        );
+        assert_eq!(params.get("empty_key").unwrap(), &Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_config_reports_line_number_on_error() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("giftwrap");
+        fs::write(&path, "gw_container test\nbad \"unterminated\n").unwrap();
+
+        let err = parse_config(&path).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .starts_with("Error: failed to parse config line 2:"));
+    }
+
+    #[test]
+    fn apply_env_overrides_set_add_and_del() {
+        let _lock = lock_env();
+        let _set = EnvVarGuard::set("GW_USER_OPT_SET_suite5_param_x1c9", "new1 new2");
+        let _add = EnvVarGuard::set("GW_USER_OPT_ADD_suite5_list_x1c9", "b2 'b three'");
+        let _del = EnvVarGuard::set("GW_USER_OPT_DEL_suite5_remove_x1c9", "ignored");
+
+        let mut params = HashMap::new();
+        params.insert("suite5_param_x1c9".to_string(), vec!["old".to_string()]);
+        params.insert("suite5_list_x1c9".to_string(), vec!["a".to_string()]);
+        params.insert("suite5_remove_x1c9".to_string(), vec!["keep".to_string()]);
+
+        apply_env_overrides(&mut params, None).unwrap();
+
+        assert_eq!(
+            params.get("suite5_param_x1c9").unwrap(),
+            &vec!["new1".to_string(), "new2".to_string()]
+        );
+        assert_eq!(
+            params.get("suite5_list_x1c9").unwrap(),
+            &vec!["a".to_string(), "b2".to_string(), "b three".to_string()]
+        );
+        assert!(params.get("suite5_remove_x1c9").is_none());
+    }
+
+    #[test]
+    fn apply_env_overrides_respects_uuid_scoping() {
+        let _lock = lock_env();
+        let _match_scoped = EnvVarGuard::set("GW_USER_OPT_SET_UUID_abc123_scoped_x1c9", "scoped");
+        let _mismatch_scoped =
+            EnvVarGuard::set("GW_USER_OPT_SET_UUID_other_scoped_x1c9", "ignored");
+        let _other = EnvVarGuard::set("GW_USER_OPT_SET_UUID_abc123_other_x1c9", "other");
+
+        let mut params = HashMap::new();
+        params.insert("scoped_x1c9".to_string(), vec!["base".to_string()]);
+
+        apply_env_overrides(&mut params, Some("abc123")).unwrap();
+
+        assert_eq!(
+            params.get("scoped_x1c9").unwrap(),
+            &vec!["scoped".to_string()]
+        );
+        assert_eq!(
+            params.get("other_x1c9").unwrap(),
+            &vec!["other".to_string()]
+        );
+    }
+
+    #[test]
+    fn apply_env_overrides_ignores_uuid_scoped_without_uuid() {
+        let _lock = lock_env();
+        let _guard = EnvVarGuard::set("GW_USER_OPT_SET_UUID_abc123_scoped_x1c9", "scoped");
+
+        let mut params = HashMap::new();
+        params.insert("scoped_x1c9".to_string(), vec!["base".to_string()]);
+
+        apply_env_overrides(&mut params, None).unwrap();
+
+        assert_eq!(
+            params.get("scoped_x1c9").unwrap(),
+            &vec!["base".to_string()]
+        );
+    }
+
+    #[test]
+    fn apply_env_overrides_reports_bad_shell_words() {
+        let _lock = lock_env();
+        let _guard = EnvVarGuard::set("GW_USER_OPT_SET_suite5_bad_x1c9", "\"unterminated");
+
+        let mut params = HashMap::new();
+        let err = apply_env_overrides(&mut params, None).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .starts_with("Error: failed to parse env override GW_USER_OPT_SET_suite5_bad_x1c9:"));
+    }
+
+    #[test]
+    fn load_from_applies_uuid_overrides_after_dash_stripping() {
+        let _lock = lock_env();
+        let temp = TempDir::new().unwrap();
+        write_config_contents(
+            temp.path(),
+            ".giftwrap",
+            "gw_container test\nuuid 1234-5678\nextra_args base\n",
+        );
+        let _guard = EnvVarGuard::set("GW_USER_OPT_ADD_UUID_12345678_extra_args", "more");
+
+        let config = load_from(temp.path()).unwrap();
+
+        assert_eq!(config.uuid.as_deref(), Some("12345678"));
+        assert_eq!(
+            config.params.get("extra_args").unwrap(),
+            &vec!["base".to_string(), "more".to_string()]
+        );
+    }
+
+    #[test]
+    fn load_from_errors_without_gw_container() {
+        let temp = TempDir::new().unwrap();
+        write_config_contents(temp.path(), "giftwrap", "extra_args base\n");
+
+        let err = load_from(temp.path()).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Error: gw_container must be specified in {}",
+                temp.path().join("giftwrap").display()
+            )
+        );
+    }
+
+    #[test]
+    fn load_from_errors_on_prefix_conflict() {
+        let temp = TempDir::new().unwrap();
+        write_config_contents(
+            temp.path(),
+            "giftwrap",
+            "gw_container test\nprefix_cmd echo\nprefix_cmd_quiet echo\n",
+        );
+
+        let err = load_from(temp.path()).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Error: must specify at most one of prefix_cmd and prefix_cmd_quiet"
+        );
     }
 }

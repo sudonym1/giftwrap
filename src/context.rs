@@ -41,7 +41,6 @@ struct GwPattern {
     dir_only: bool,
     anchored: bool,
     has_slash: bool,
-    raw: String,
     tokens: Vec<Token>,
 }
 
@@ -239,7 +238,6 @@ fn parse_gwinclude_files(
                 dir_only,
                 anchored,
                 has_slash,
-                raw: pattern,
                 tokens,
             });
         }
@@ -502,4 +500,110 @@ fn join_components(components: &[&str]) -> String {
 
 fn path_depth(path: &Path) -> usize {
     path.components().count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_gwinclude_file_list, compute_sha, parse_gwinclude_files};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use tempfile::tempdir;
+
+    fn write_file(root: &Path, rel: &str, contents: &str) {
+        let path = root.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn build_gwinclude_file_list_applies_include_exclude_rules() {
+        let temp = tempdir().unwrap();
+        write_file(
+            temp.path(),
+            ".gwinclude",
+            "# root includes\n/src/*.rs\nbuild/\ndocs/*.md\n!/docs/secret.md\n",
+        );
+        write_file(temp.path(), "src/main.rs", "fn main() {}\n");
+        write_file(temp.path(), "nested/src/other.rs", "fn other() {}\n");
+        write_file(temp.path(), "build/output.log", "log\n");
+        write_file(temp.path(), "nested/build/inner.txt", "inner\n");
+        write_file(temp.path(), "docs/readme.md", "readme\n");
+        write_file(temp.path(), "docs/secret.md", "secret\n");
+        write_file(temp.path(), "nested/docs/extra.md", "extra\n");
+        write_file(temp.path(), "notes.txt", "notes\n");
+
+        let files = build_gwinclude_file_list(temp.path()).unwrap();
+
+        let expected = vec![
+            ".gwinclude",
+            "build/output.log",
+            "docs/readme.md",
+            "nested/build/inner.txt",
+            "src/main.rs",
+        ];
+        assert_eq!(files, expected);
+    }
+
+    #[test]
+    fn build_gwinclude_file_list_applies_nested_gwinclude_overrides() {
+        let temp = tempdir().unwrap();
+        write_file(temp.path(), ".gwinclude", "*.txt\n");
+        write_file(temp.path(), "notes.txt", "notes\n");
+        write_file(temp.path(), "nested/.gwinclude", "!secret.txt\n");
+        write_file(temp.path(), "nested/keep.txt", "keep\n");
+        write_file(temp.path(), "nested/secret.txt", "secret\n");
+
+        let files = build_gwinclude_file_list(temp.path()).unwrap();
+
+        let expected = vec![
+            ".gwinclude",
+            "nested/.gwinclude",
+            "nested/keep.txt",
+            "notes.txt",
+        ];
+        assert_eq!(files, expected);
+    }
+
+    #[test]
+    fn compute_sha_is_stable_and_changes_with_content() {
+        let temp = tempdir().unwrap();
+        write_file(temp.path(), ".gwinclude", "*.txt\n");
+        write_file(temp.path(), "a.txt", "alpha\n");
+        write_file(temp.path(), "b.txt", "beta\n");
+
+        let files = build_gwinclude_file_list(temp.path()).unwrap();
+
+        let first = compute_sha(temp.path(), &files).unwrap();
+        let second = compute_sha(temp.path(), &files).unwrap();
+        assert_eq!(first, second);
+
+        write_file(temp.path(), "b.txt", "beta2\n");
+        let third = compute_sha(temp.path(), &files).unwrap();
+        assert_ne!(first, third);
+    }
+
+    #[test]
+    fn build_gwinclude_file_list_errors_without_gwinclude() {
+        let temp = tempdir().unwrap();
+        write_file(temp.path(), "a.txt", "alpha\n");
+
+        let err = build_gwinclude_file_list(temp.path()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Error: version_by_build_context requires a .gwinclude file"
+        );
+    }
+
+    #[test]
+    fn parse_gwinclude_files_errors_on_missing_file() {
+        let temp = tempdir().unwrap();
+        let missing = PathBuf::from("missing/.gwinclude");
+
+        let err = parse_gwinclude_files(temp.path(), &[missing]).unwrap_err();
+        assert!(err
+            .to_string()
+            .starts_with("Error: failed to read gwinclude file "));
+    }
 }

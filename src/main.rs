@@ -58,17 +58,11 @@ fn run() -> Result<(), String> {
         return Err("Error: context sha us unused by this configuration".to_string());
     }
 
-    let mut image = params
-        .get("gw_container")
-        .and_then(|vals| vals.first())
-        .ok_or_else(|| "Error: gw_container must be specified".to_string())?
-        .to_string();
-    if let Some(sha) = &ctx_sha {
-        image = format!("{image}:{sha}");
-    }
-    if let Some(override_image) = cli_opts.override_image.clone() {
-        image = override_image;
-    }
+    let image = select_image(
+        &params,
+        ctx_sha.as_deref(),
+        cli_opts.override_image.as_deref(),
+    )?;
 
     if matches!(cli_opts.action, cli::CliAction::PrintImage) {
         println!("{image}");
@@ -89,9 +83,9 @@ fn run() -> Result<(), String> {
         run_hook(hook, &root_dir)?;
     }
 
-    if cli_opts.rebuild {
-        println!("Rebuilding container {image}");
-        exec::build_image(&image, &root_dir).map_err(|err| err.to_string())?;
+    if let Some(rebuild_image) = rebuild_plan(cli_opts.rebuild, &image) {
+        println!("Rebuilding container {rebuild_image}");
+        exec::build_image(&rebuild_image, &root_dir).map_err(|err| err.to_string())?;
     }
 
     let mut env_overrides = BTreeMap::new();
@@ -105,11 +99,9 @@ fn run() -> Result<(), String> {
     let interactive = true;
     let tty = stdin_tty && stdout_tty;
     let mut terminfo = None;
-    if tty {
-        if let Ok(term) = env::var("TERM") {
-            env_overrides.insert("TERM".to_string(), term.clone());
-            terminfo = Some(load_terminfo(&term)?);
-        }
+    if tty && let Ok(term) = env::var("TERM") {
+        env_overrides.insert("TERM".to_string(), term.clone());
+        terminfo = Some(load_terminfo(&term)?);
     }
 
     if let Some(env_keys) = params.get("env_overrides") {
@@ -148,10 +140,8 @@ fn run() -> Result<(), String> {
         }
     }
 
-    if params.contains_key("share_git_dir") {
-        if let Some(git_mount) = share_git_dir(&root_dir) {
-            mounts.push(git_mount);
-        }
+    if params.contains_key("share_git_dir") && let Some(git_mount) = share_git_dir(&root_dir) {
+        mounts.push(git_mount);
     }
 
     let mut extra_shell_path = None;
@@ -188,37 +178,17 @@ fn run() -> Result<(), String> {
 
     let uid = unsafe { libc::getuid() } as u32;
     let gid = unsafe { libc::getgid() } as u32;
-    let user_name = resolve_username(uid);
-    let user_home = build_home(&user_name);
-
-    let persist_env = params
-        .get("persist_environment")
-        .and_then(|vals| vals.first())
-        .map(|path| internal::PersistEnvSpec {
-            path: resolve_real_path(path, &root_dir),
-            restore: true,
-            save: true,
-        });
-
-    let internal_spec = internal::InternalSpec {
-        protocol_version: internal::INTERNAL_SPEC_VERSION,
-        workdir: cd_to.clone(),
-        root_dir: root_dir.clone(),
-        user: internal::UserSpec {
-            name: user_name,
-            uid,
-            gid,
-            home: user_home,
-        },
-        env_overrides: env_overrides.clone(),
-        persist_env,
+    let internal_spec = build_internal_spec(
+        &root_dir,
+        cd_to,
+        user_cmd.argv.clone(),
+        env_overrides,
+        &params,
         terminfo,
-        command: user_cmd.argv.clone(),
-        shell: None,
-        extra_shell: extra_shell_path,
-        prefix_cmd: params.get("prefix_cmd").cloned().unwrap_or_default(),
-        prefix_cmd_quiet: params.get("prefix_cmd_quiet").cloned().unwrap_or_default(),
-    };
+        extra_shell_path,
+        uid,
+        gid,
+    );
 
     let internal_spec_json = serde_json::to_string(&internal_spec)
         .map_err(|err| format!("Error: failed to serialize internal spec: {err}"))?;
@@ -274,6 +244,77 @@ GW Flags:
     extra-args: add extra args to the runtime invocation
 "#
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_internal_spec(
+    root_dir: &Path,
+    workdir: PathBuf,
+    command: Vec<String>,
+    env_overrides: std::collections::BTreeMap<String, String>,
+    params: &std::collections::HashMap<String, Vec<String>>,
+    terminfo: Option<internal::TerminfoSpec>,
+    extra_shell: Option<PathBuf>,
+    uid: u32,
+    gid: u32,
+) -> internal::InternalSpec {
+    let user_name = resolve_username(uid);
+    let user_home = build_home(&user_name);
+    let persist_env = params
+        .get("persist_environment")
+        .and_then(|vals| vals.first())
+        .map(|path| internal::PersistEnvSpec {
+            path: resolve_real_path(path, root_dir),
+            restore: true,
+            save: true,
+        });
+
+    internal::InternalSpec {
+        protocol_version: internal::INTERNAL_SPEC_VERSION,
+        workdir,
+        root_dir: root_dir.to_path_buf(),
+        user: internal::UserSpec {
+            name: user_name,
+            uid,
+            gid,
+            home: user_home,
+        },
+        env_overrides,
+        persist_env,
+        terminfo,
+        command,
+        shell: None,
+        extra_shell,
+        prefix_cmd: params.get("prefix_cmd").cloned().unwrap_or_default(),
+        prefix_cmd_quiet: params.get("prefix_cmd_quiet").cloned().unwrap_or_default(),
+    }
+}
+
+fn select_image(
+    params: &std::collections::HashMap<String, Vec<String>>,
+    ctx_sha: Option<&str>,
+    override_image: Option<&str>,
+) -> Result<String, String> {
+    let mut image = params
+        .get("gw_container")
+        .and_then(|vals| vals.first())
+        .ok_or_else(|| "Error: gw_container must be specified".to_string())?
+        .to_string();
+    if let Some(sha) = ctx_sha {
+        image = format!("{image}:{sha}");
+    }
+    if let Some(override_image) = override_image {
+        image = override_image.to_string();
+    }
+    Ok(image)
+}
+
+fn rebuild_plan(rebuild: bool, image: &str) -> Option<String> {
+    if rebuild {
+        Some(image.to_string())
+    } else {
+        None
+    }
 }
 
 fn run_hook(hook: &[String], root_dir: &Path) -> Result<(), String> {
@@ -513,15 +554,11 @@ fn find_in_path(binary: &str) -> Option<PathBuf> {
 }
 
 fn resolve_username(uid: u32) -> String {
-    if let Ok(name) = std::env::var("USER") {
-        if !name.is_empty() {
-            return name;
-        }
+    if let Ok(name) = std::env::var("USER") && !name.is_empty() {
+        return name;
     }
-    if let Ok(name) = std::env::var("LOGNAME") {
-        if !name.is_empty() {
-            return name;
-        }
+    if let Ok(name) = std::env::var("LOGNAME") && !name.is_empty() {
+        return name;
     }
     unsafe {
         let pwd = libc::getpwuid(uid as libc::uid_t);
@@ -568,9 +605,12 @@ fn format_exit_status(status: &std::process::ExitStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        abs_path, expand_share, mkhostname, parse_share, resolve_path, resolve_real_path,
-        share_git_dir,
+        abs_path, build_internal_spec, expand_share, mkhostname, parse_share, rebuild_plan,
+        resolve_path, resolve_real_path, select_image, share_git_dir,
     };
+    use crate::internal;
+    use serde_json::Value;
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::Mutex;
@@ -588,6 +628,12 @@ mod tests {
             .output()
             .map(|out| out.status.success())
             .unwrap_or(false)
+    }
+
+    fn params_with_image(image: &str) -> HashMap<String, Vec<String>> {
+        let mut params = HashMap::new();
+        params.insert("gw_container".to_string(), vec![image.to_string()]);
+        params
     }
 
     #[test]
@@ -628,6 +674,42 @@ mod tests {
                 std::env::remove_var("GW_TEST_SHARE");
             }
         }
+    }
+
+    #[test]
+    fn select_image_defaults_to_container_value() {
+        let params = params_with_image("registry.local/app");
+        let image = select_image(&params, None, None).expect("select image");
+        assert_eq!(image, "registry.local/app");
+    }
+
+    #[test]
+    fn select_image_appends_context_sha() {
+        let params = params_with_image("registry.local/app");
+        let image = select_image(&params, Some("deadbeef"), None).expect("select image");
+        assert_eq!(image, "registry.local/app:deadbeef");
+    }
+
+    #[test]
+    fn select_image_override_wins_over_context() {
+        let params = params_with_image("registry.local/app");
+        let image = select_image(&params, Some("deadbeef"), Some("override/app:tag"))
+            .expect("select image");
+        assert_eq!(image, "override/app:tag");
+    }
+
+    #[test]
+    fn select_image_errors_without_gw_container() {
+        let params = HashMap::new();
+        let err = select_image(&params, None, None).expect_err("missing gw_container");
+        assert_eq!(err, "Error: gw_container must be specified");
+    }
+
+    #[test]
+    fn rebuild_plan_returns_image_when_enabled() {
+        let image = "registry/app:tag";
+        assert_eq!(rebuild_plan(false, image), None);
+        assert_eq!(rebuild_plan(true, image), Some(image.to_string()));
     }
 
     #[test]
@@ -681,6 +763,261 @@ mod tests {
 
         let resolved = resolve_real_path("link", root.path());
         assert_eq!(resolved, real.canonicalize().expect("canonicalize"));
+    }
+
+    #[test]
+    fn internal_spec_serializes_expected_shape() {
+        let _lock = lock_env();
+        let prior_user = std::env::var("USER").ok();
+        let prior_logname = std::env::var("LOGNAME").ok();
+
+        unsafe {
+            std::env::set_var("USER", "gw-test");
+            std::env::remove_var("LOGNAME");
+        }
+
+        let root = TempDir::new().expect("tempdir");
+        let root_dir = root.path().canonicalize().expect("canonicalize root");
+        let workdir = root_dir.join("work");
+        let extra_shell = root_dir.join("extra.sh");
+
+        let mut env_overrides = BTreeMap::new();
+        env_overrides.insert(
+            "GW_BUILD_ROOT".to_string(),
+            root_dir.to_string_lossy().into_owned(),
+        );
+        env_overrides.insert("GW_EXTRA".to_string(), "1".to_string());
+
+        let mut params = HashMap::new();
+        params.insert(
+            "persist_environment".to_string(),
+            vec!["persist.env".to_string()],
+        );
+        params.insert(
+            "prefix_cmd".to_string(),
+            vec!["/usr/bin/env".to_string(), "FOO=bar".to_string()],
+        );
+
+        let terminfo = internal::TerminfoSpec {
+            term: "xterm-256color".to_string(),
+            data: vec![1, 2, 3],
+        };
+
+        let spec = build_internal_spec(
+            &root_dir,
+            workdir.clone(),
+            vec!["echo".to_string(), "hi".to_string()],
+            env_overrides,
+            &params,
+            Some(terminfo),
+            Some(extra_shell.clone()),
+            123,
+            456,
+        );
+
+        let value = serde_json::to_value(&spec).expect("serialize internal spec");
+        let obj = value.as_object().expect("internal spec object");
+
+        let expected: HashSet<&str> = [
+            "protocol_version",
+            "workdir",
+            "root_dir",
+            "user",
+            "env_overrides",
+            "persist_env",
+            "terminfo",
+            "command",
+            "shell",
+            "extra_shell",
+            "prefix_cmd",
+            "prefix_cmd_quiet",
+        ]
+        .into_iter()
+        .collect();
+        let keys: HashSet<&str> = obj.keys().map(|key| key.as_str()).collect();
+        assert_eq!(keys, expected);
+
+        assert_eq!(
+            obj.get("protocol_version").and_then(Value::as_u64),
+            Some(internal::INTERNAL_SPEC_VERSION as u64)
+        );
+        assert_eq!(
+            obj.get("workdir").and_then(Value::as_str),
+            Some(workdir.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            obj.get("root_dir").and_then(Value::as_str),
+            Some(root_dir.to_string_lossy().as_ref())
+        );
+        assert_eq!(obj.get("shell"), Some(&Value::Null));
+        assert_eq!(
+            obj.get("extra_shell").and_then(Value::as_str),
+            Some(extra_shell.to_string_lossy().as_ref())
+        );
+
+        let command = obj
+            .get("command")
+            .and_then(Value::as_array)
+            .expect("command array");
+        assert_eq!(command, &vec![Value::from("echo"), Value::from("hi")]);
+
+        let env = obj
+            .get("env_overrides")
+            .and_then(Value::as_object)
+            .expect("env overrides object");
+        assert_eq!(
+            env.get("GW_BUILD_ROOT").and_then(Value::as_str),
+            Some(root_dir.to_string_lossy().as_ref())
+        );
+        assert_eq!(env.get("GW_EXTRA").and_then(Value::as_str), Some("1"));
+
+        let persist = obj
+            .get("persist_env")
+            .and_then(Value::as_object)
+            .expect("persist env object");
+        assert_eq!(
+            persist.get("path").and_then(Value::as_str),
+            Some(root_dir.join("persist.env").to_string_lossy().as_ref())
+        );
+        assert_eq!(persist.get("restore").and_then(Value::as_bool), Some(true));
+        assert_eq!(persist.get("save").and_then(Value::as_bool), Some(true));
+
+        let terminfo = obj
+            .get("terminfo")
+            .and_then(Value::as_object)
+            .expect("terminfo object");
+        assert_eq!(
+            terminfo.get("term").and_then(Value::as_str),
+            Some("xterm-256color")
+        );
+        let data = terminfo
+            .get("data")
+            .and_then(Value::as_array)
+            .expect("terminfo data array");
+        assert_eq!(data, &vec![Value::from(1), Value::from(2), Value::from(3)]);
+
+        let prefix_cmd = obj
+            .get("prefix_cmd")
+            .and_then(Value::as_array)
+            .expect("prefix cmd array");
+        assert_eq!(
+            prefix_cmd,
+            &vec![Value::from("/usr/bin/env"), Value::from("FOO=bar")]
+        );
+        let prefix_quiet = obj
+            .get("prefix_cmd_quiet")
+            .and_then(Value::as_array)
+            .expect("prefix cmd quiet array");
+        assert!(prefix_quiet.is_empty());
+
+        if let Some(value) = prior_user {
+            unsafe {
+                std::env::set_var("USER", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("USER");
+            }
+        }
+        if let Some(value) = prior_logname {
+            unsafe {
+                std::env::set_var("LOGNAME", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("LOGNAME");
+            }
+        }
+    }
+
+    #[test]
+    fn internal_spec_sets_user_uid_gid_and_home() {
+        let _lock = lock_env();
+        let prior_user = std::env::var("USER").ok();
+        let prior_logname = std::env::var("LOGNAME").ok();
+
+        unsafe {
+            std::env::set_var("USER", "gw-user");
+            std::env::remove_var("LOGNAME");
+        }
+
+        let root = TempDir::new().expect("tempdir");
+        let root_dir = root.path().canonicalize().expect("canonicalize root");
+        let workdir = root_dir.join("work");
+
+        let spec = build_internal_spec(
+            &root_dir,
+            workdir,
+            vec!["true".to_string()],
+            BTreeMap::new(),
+            &HashMap::new(),
+            None,
+            None,
+            42,
+            1000,
+        );
+
+        assert_eq!(spec.user.name, "gw-user");
+        assert_eq!(spec.user.uid, 42);
+        assert_eq!(spec.user.gid, 1000);
+        assert_eq!(
+            spec.user.home,
+            PathBuf::from("/tmp/dr-tmp-home-gw-user/gw-user")
+        );
+
+        if let Some(value) = prior_user {
+            unsafe {
+                std::env::set_var("USER", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("USER");
+            }
+        }
+        if let Some(value) = prior_logname {
+            unsafe {
+                std::env::set_var("LOGNAME", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("LOGNAME");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn internal_spec_persist_env_canonicalizes_symlink() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let root = TempDir::new().expect("tempdir");
+        let root_dir = root.path().canonicalize().expect("canonicalize root");
+        let real = root_dir.join("real");
+        fs::create_dir(&real).expect("create real dir");
+        let link = root_dir.join("link");
+        symlink(&real, &link).expect("symlink");
+
+        let mut params = HashMap::new();
+        params.insert("persist_environment".to_string(), vec!["link".to_string()]);
+
+        let spec = build_internal_spec(
+            &root_dir,
+            root_dir.join("work"),
+            vec!["true".to_string()],
+            BTreeMap::new(),
+            &params,
+            None,
+            None,
+            0,
+            0,
+        );
+
+        let persist = spec.persist_env.expect("persist env");
+        assert_eq!(
+            persist.path,
+            real.canonicalize().expect("canonicalize real")
+        );
     }
 
     #[test]

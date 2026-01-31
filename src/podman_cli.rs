@@ -44,28 +44,6 @@ pub fn build_image(image: &str, context_dir: &Path) -> Result<(), PodmanError> {
     }
 }
 
-pub fn inspect_image(image: &str) -> Result<bool, PodmanError> {
-    let status = Command::new("podman")
-        .arg("image")
-        .arg("exists")
-        .arg(image)
-        .status()
-        .map_err(|err| {
-            PodmanError::new(format!(
-                "Error: failed to launch runtime image exists: {err}"
-            ))
-        })?;
-
-    match status.code() {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
-        _ => Err(PodmanError::new(format!(
-            "Error: runtime image exists failed (exit {})",
-            format_exit_status(&status)
-        ))),
-    }
-}
-
 pub fn build_run_args(spec: &ContainerSpec) -> Result<Vec<String>, PodmanError> {
     let mut args = Vec::new();
     args.push("run".to_string());

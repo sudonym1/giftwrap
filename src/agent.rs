@@ -48,8 +48,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 fn load_spec() -> Result<internal::InternalSpec, String> {
     let raw = env::var(SPEC_ENV)
         .map_err(|_| format!("Error: missing {SPEC_ENV} environment variable"))?;
-    serde_json::from_str(&raw)
-        .map_err(|err| format!("Error: failed to parse internal spec: {err}"))
+    serde_json::from_str(&raw).map_err(|err| format!("Error: failed to parse internal spec: {err}"))
 }
 
 fn run_spec(spec: internal::InternalSpec) -> Result<(), String> {
@@ -83,16 +82,17 @@ fn run_spec(spec: internal::InternalSpec) -> Result<(), String> {
 }
 
 fn build_base_env(spec: &internal::InternalSpec) -> Result<BTreeMap<String, String>, String> {
-    if let Some(persist) = &spec.persist_env {
-        if persist.restore && persist.path.exists() {
-            match load_env(&persist.path) {
-                Ok(env_map) => return Ok(env_map),
-                Err(err) => {
-                    eprintln!(
-                        "Warning: failed to restore environment from {}: {err}",
-                        persist.path.display()
-                    );
-                }
+    if let Some(persist) = &spec.persist_env
+        && persist.restore
+        && persist.path.exists()
+    {
+        match load_env(&persist.path) {
+            Ok(env_map) => return Ok(env_map),
+            Err(err) => {
+                eprintln!(
+                    "Warning: failed to restore environment from {}: {err}",
+                    persist.path.display()
+                );
             }
         }
     }
@@ -125,10 +125,7 @@ fn setup_user(user: &internal::UserSpec) -> Result<(), String> {
     })?;
 
     run_command_ignore("userdel", &["os76"]);
-    run_command_ignore(
-        "groupadd",
-        &["-g", &user.gid.to_string(), &user.name],
-    );
+    run_command_ignore("groupadd", &["-g", &user.gid.to_string(), &user.name]);
     run_command_ignore(
         "useradd",
         &[
@@ -149,11 +146,7 @@ fn setup_user(user: &internal::UserSpec) -> Result<(), String> {
     if sudoers_path.exists() {
         run_command_ignore(
             "sed",
-            &[
-                "-ir",
-                &format!("s/.*{}.*//g", user.name),
-                "/etc/sudoers",
-            ],
+            &["-ir", &format!("s/.*{}.*//g", user.name), "/etc/sudoers"],
         );
         let mut sudoers = OpenOptions::new()
             .append(true)
@@ -194,12 +187,8 @@ fn ensure_home_dir(user: &internal::UserSpec) -> Result<(), String> {
 }
 
 fn chown_path(path: &Path, uid: u32, gid: u32) -> Result<(), String> {
-    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
-        format!(
-            "Error: invalid path contains NUL byte: {}",
-            path.display()
-        )
-    })?;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| format!("Error: invalid path contains NUL byte: {}", path.display()))?;
     unsafe {
         if libc::chown(c_path.as_ptr(), uid as libc::uid_t, gid as libc::gid_t) != 0 {
             return Err(format!(
@@ -238,20 +227,12 @@ fn install_terminfo(
         .get("HOME")
         .ok_or_else(|| "Error: HOME is missing from environment".to_string())?;
     let terminfo_dir = Path::new(home).join(".terminfo");
-    fs::create_dir_all(&terminfo_dir).map_err(|err| {
-        format!(
-            "Error: failed to create {}: {err}",
-            terminfo_dir.display()
-        )
-    })?;
+    fs::create_dir_all(&terminfo_dir)
+        .map_err(|err| format!("Error: failed to create {}: {err}", terminfo_dir.display()))?;
 
     let terminfo_file = Path::new(home).join("terminfo");
-    fs::write(&terminfo_file, &terminfo.data).map_err(|err| {
-        format!(
-            "Error: failed to write {}: {err}",
-            terminfo_file.display()
-        )
-    })?;
+    fs::write(&terminfo_file, &terminfo.data)
+        .map_err(|err| format!("Error: failed to write {}: {err}", terminfo_file.display()))?;
 
     let _ = Command::new("tic")
         .arg(&terminfo_file)
@@ -279,10 +260,7 @@ fn build_shell_script(spec: &internal::InternalSpec, agent_path: &str) -> String
     }
 
     if !spec.prefix_cmd.is_empty() {
-        cmds.push(format!(
-            "{} < /dev/null",
-            mk_bash_exe_env(&spec.prefix_cmd)
-        ));
+        cmds.push(format!("{} < /dev/null", mk_bash_exe_env(&spec.prefix_cmd)));
     } else if !spec.prefix_cmd_quiet.is_empty() {
         cmds.push(format!(
             "{} < /dev/null > /dev/null 2>&1",
@@ -295,14 +273,12 @@ fn build_shell_script(spec: &internal::InternalSpec, agent_path: &str) -> String
         cmds.push("drrc=$?".to_string());
     }
 
-    if let Some(persist) = &spec.persist_env {
-        if persist.save {
-            cmds.push(format!(
-                "{} agent --dump-env {}",
-                shell_escape(agent_path),
-                shell_escape(&persist.path.to_string_lossy())
-            ));
-        }
+    if let Some(persist) = &spec.persist_env && persist.save {
+        cmds.push(format!(
+            "{} agent --dump-env {}",
+            shell_escape(agent_path),
+            shell_escape(&persist.path.to_string_lossy())
+        ));
     }
 
     if !spec.command.is_empty() {
@@ -335,11 +311,7 @@ fn select_shell(spec: &internal::InternalSpec) -> String {
     }
 }
 
-fn exec_shell(
-    shell: &str,
-    script: &str,
-    env_map: &BTreeMap<String, String>,
-) -> Result<(), String> {
+fn exec_shell(shell: &str, script: &str, env_map: &BTreeMap<String, String>) -> Result<(), String> {
     let err = Command::new(shell)
         .arg("-c")
         .arg(script)
@@ -354,13 +326,12 @@ fn dump_env(path: &Path) -> Result<(), String> {
     env_map.remove("SHLVL");
     let data = serde_json::to_vec(&env_map)
         .map_err(|err| format!("Error: failed to serialize environment: {err}"))?;
-    fs::write(path, data)
-        .map_err(|err| format!("Error: failed to write {}: {err}", path.display()))
+    fs::write(path, data).map_err(|err| format!("Error: failed to write {}: {err}", path.display()))
 }
 
 fn load_env(path: &Path) -> Result<BTreeMap<String, String>, String> {
-    let data = fs::read(path)
-        .map_err(|err| format!("Error: failed to read {}: {err}", path.display()))?;
+    let data =
+        fs::read(path).map_err(|err| format!("Error: failed to read {}: {err}", path.display()))?;
     serde_json::from_slice(&data)
         .map_err(|err| format!("Error: failed to parse {}: {err}", path.display()))
 }

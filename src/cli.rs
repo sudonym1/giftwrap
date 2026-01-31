@@ -133,7 +133,7 @@ pub fn parse_args(args: &[String]) -> Result<(CliOptions, UserCommand), CliError
 
 #[cfg(test)]
 mod tests {
-    use super::{CliAction, CliOptions, UserCommand, parse_args};
+    use super::{parse_args, CliAction, CliOptions, UserCommand};
 
     fn parse(args: &[&str]) -> (CliOptions, UserCommand) {
         let argv = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
@@ -214,7 +214,10 @@ mod tests {
             "bash",
         ]);
         assert_eq!(opts.use_ctx.as_deref(), Some("abc123"));
-        assert_eq!(opts.override_image.as_deref(), Some("registry.local/app:tag"));
+        assert_eq!(
+            opts.override_image.as_deref(),
+            Some("registry.local/app:tag")
+        );
         assert!(opts.rebuild);
         assert_eq!(cmd.argv, vec!["bash"]);
     }

@@ -6,13 +6,6 @@ use serde::{Deserialize, Serialize};
 /// Protocol version for host <-> agent communication.
 pub const INTERNAL_SPEC_VERSION: u32 = 1;
 
-/// Fully composed run specification produced by the host.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunSpec {
-    pub container: ContainerSpec,
-    pub internal: InternalSpec,
-}
-
 /// Container runtime inputs for a run invocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerSpec {

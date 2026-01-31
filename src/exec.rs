@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::Path;
 
-use crate::internal::{ContainerSpec, RunSpec};
+use crate::internal::ContainerSpec;
 use crate::podman_cli;
 
 #[derive(Debug)]
@@ -29,14 +29,6 @@ pub fn build_image(image: &str, context_dir: &Path) -> Result<(), ExecError> {
     podman_cli::build_image(image, context_dir).map_err(|err| ExecError::new(err.to_string()))
 }
 
-pub fn inspect_image(image: &str) -> Result<bool, ExecError> {
-    podman_cli::inspect_image(image).map_err(|err| ExecError::new(err.to_string()))
-}
-
 pub fn run_container(spec: &ContainerSpec) -> Result<(), ExecError> {
     podman_cli::exec_run(spec).map_err(|err| ExecError::new(err.to_string()))
-}
-
-pub fn run(spec: &RunSpec) -> Result<(), ExecError> {
-    run_container(&spec.container)
 }

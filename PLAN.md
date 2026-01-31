@@ -94,6 +94,7 @@
 - CLI flag parsing implemented (including `--` split handling).
 - Context module implemented (gwinclude/dockerignore selection + SHA + sha-file reuse).
 - Podman CLI wrapper implemented with build/inspect/run and exec wiring.
+- CLI now composes a minimal Podman run from config/flags and executes it.
 
 ## Next steps (implementation sequence)
 - [x] Define shared data models: `Config`, `CliOptions`, `RunSpec`, `InternalSpec`, `ContainerSpec`.
@@ -101,6 +102,6 @@
 - [x] Implement `context` module to match git-style file selection + `.gwinclude` semantics + SHA logic.
 - [ ] Implement agent runtime pieces (user setup, env handling, exec) and musl-static build config.
 - [x] Implement `podman_cli` module and wire into `exec`.
-- [ ] Replace old docker CLI invocation with Podman CLI `run`.
+- [x] Replace old docker CLI invocation with Podman CLI `run`.
 - [ ] Add PTY bridging and resize handling for interactive mode.
 - [ ] Validate parity with the Python script on key flows.

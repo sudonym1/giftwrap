@@ -51,7 +51,9 @@ pub fn inspect_image(image: &str) -> Result<bool, PodmanError> {
         .arg(image)
         .status()
         .map_err(|err| {
-            PodmanError::new(format!("Error: failed to launch podman image exists: {err}"))
+            PodmanError::new(format!(
+                "Error: failed to launch podman image exists: {err}"
+            ))
         })?;
 
     match status.code() {
@@ -75,7 +77,9 @@ pub fn build_run_args(spec: &ContainerSpec) -> Result<Vec<String>, PodmanError> 
         args.push("-t".to_string());
     }
 
-    args.push("--rm".to_string());
+    if spec.remove {
+        args.push("--rm".to_string());
+    }
 
     if spec.init {
         args.push("--init".to_string());

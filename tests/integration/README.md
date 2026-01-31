@@ -46,3 +46,4 @@ Each run writes artifacts under `artifacts/integration/<run-id>/`:
 - `persist-env`: persisted environment round-trip across two runs.
 - `prelaunch-extra-shell`: prelaunch hook + extra shell + prefix cmd.
 - `git-dir-share`: `share_git_dir` mount of the repo git dir.
+- `rebuild-flag`: `--gw-rebuild` builds a local image and reads a marker file.

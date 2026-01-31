@@ -127,7 +127,7 @@ fn run() -> Result<(), String> {
     }
     mounts.push(internal::Mount {
         source: root_dir.clone(),
-        target: mount_target,
+        target: mount_target.clone(),
         read_only: false,
         options: Vec::new(),
     });
@@ -160,6 +160,19 @@ fn run() -> Result<(), String> {
         });
         extra_shell_path = Some(resolved);
     }
+
+    let agent_override = params
+        .get("gw_agent")
+        .and_then(|vals| vals.first())
+        .map(|val| val.as_str());
+    let (agent_source, agent_target) =
+        resolve_agent_mount(agent_override, &root_dir, &mount_target)?;
+    mounts.push(internal::Mount {
+        source: agent_source,
+        target: agent_target.clone(),
+        read_only: true,
+        options: Vec::new(),
+    });
 
     let mut extra_args = cli_opts.extra_args.clone();
     let mut config_extra_args = params.get("extra_args").cloned().unwrap_or_default();
@@ -208,11 +221,7 @@ fn run() -> Result<(), String> {
     let internal_spec_json = serde_json::to_string(&internal_spec)
         .map_err(|err| format!("Error: failed to serialize internal spec: {err}"))?;
 
-    let agent_path = params
-        .get("gw_agent")
-        .and_then(|vals| vals.first())
-        .map(|val| val.to_string())
-        .unwrap_or_else(|| "/usr/local/bin/giftwrap-agent".to_string());
+    let agent_path = agent_target.to_string_lossy().into_owned();
 
     let mut container_env = BTreeMap::new();
     container_env.insert("GW_INTERNAL_SPEC".to_string(), internal_spec_json);
@@ -379,6 +388,122 @@ fn resolve_path(path: &str, root_dir: &Path) -> PathBuf {
 fn resolve_real_path(path: &str, root_dir: &Path) -> PathBuf {
     let candidate = abs_path(path, root_dir);
     std::fs::canonicalize(&candidate).unwrap_or(candidate)
+}
+
+fn resolve_agent_mount(
+    agent_override: Option<&str>,
+    root_dir: &Path,
+    mount_target: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    let (target, hint) = match agent_override {
+        Some(value) => {
+            let value_path = PathBuf::from(value);
+            if value_path.is_absolute() {
+                (value_path.clone(), Some(value_path))
+            } else {
+                (mount_target.join(value), Some(resolve_real_path(value, root_dir)))
+            }
+        }
+        None => {
+            let default_path = PathBuf::from("/usr/local/bin/giftwrap-agent");
+            (default_path.clone(), Some(default_path))
+        }
+    };
+
+    let hint_source = hint
+        .as_ref()
+        .and_then(|path| if path.is_file() { Some(path.clone()) } else { None });
+    let host_source = if agent_override.is_none() {
+        find_musl_agent(root_dir)
+            .or_else(|| hint_source.clone())
+            .or_else(find_adjacent_agent)
+            .or_else(|| find_in_path("giftwrap-agent"))
+    } else {
+        hint_source
+            .or_else(|| find_musl_agent(root_dir))
+            .or_else(find_adjacent_agent)
+            .or_else(|| find_in_path("giftwrap-agent"))
+    };
+
+    match host_source {
+        Some(source) => Ok((source, target)),
+        None => {
+            let hint_display = hint
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "<none>".to_string());
+            Err(format!(
+                "Error: failed to locate giftwrap-agent on host (checked {hint_display}, musl target, giftwrap-adjacent, and PATH). Build giftwrap-agent or set gw_agent to a valid host path."
+            ))
+        }
+    }
+}
+
+fn find_musl_agent(root_dir: &Path) -> Option<PathBuf> {
+    let target_root = root_dir.join("target");
+    let preferred = target_root.join(format!(
+        "{}-unknown-linux-musl",
+        std::env::consts::ARCH
+    ));
+    if let Some(found) = find_musl_agent_in_target(&preferred) {
+        return Some(found);
+    }
+
+    let entries = std::fs::read_dir(&target_root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path == preferred {
+            continue;
+        }
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        if !name.ends_with("linux-musl") {
+            continue;
+        }
+        if let Some(found) = find_musl_agent_in_target(&path) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_musl_agent_in_target(target_dir: &Path) -> Option<PathBuf> {
+    let debug = target_dir.join("debug").join("giftwrap-agent");
+    if debug.is_file() {
+        return Some(debug);
+    }
+    let release = target_dir.join("release").join("giftwrap-agent");
+    if release.is_file() {
+        return Some(release);
+    }
+    None
+}
+
+fn find_adjacent_agent() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let candidate = dir.join("giftwrap-agent");
+    if candidate.is_file() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+fn find_in_path(binary: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(binary);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn resolve_username(uid: u32) -> String {

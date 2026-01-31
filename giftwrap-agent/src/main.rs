@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -149,27 +150,74 @@ fn setup_user(user: &internal::UserSpec) -> Result<(), String> {
             &user.name,
         ],
     );
-    run_command_ignore(
-        "sed",
-        &[
-            "-ir",
-            &format!("s/.*{}.*//g", user.name),
-            "/etc/sudoers",
-        ],
-    );
 
-    let mut sudoers = OpenOptions::new()
-        .append(true)
-        .open("/etc/sudoers")
-        .map_err(|err| format!("Error: failed to open /etc/sudoers: {err}"))?;
-    writeln!(sudoers, "{} ALL=(ALL) NOPASSWD: ALL", user.name)
-        .map_err(|err| format!("Error: failed to update /etc/sudoers: {err}"))?;
+    ensure_home_dir(user)?;
+
+    let sudoers_path = Path::new("/etc/sudoers");
+    if sudoers_path.exists() {
+        run_command_ignore(
+            "sed",
+            &[
+                "-ir",
+                &format!("s/.*{}.*//g", user.name),
+                "/etc/sudoers",
+            ],
+        );
+        let mut sudoers = OpenOptions::new()
+            .append(true)
+            .open(sudoers_path)
+            .map_err(|err| format!("Error: failed to open /etc/sudoers: {err}"))?;
+        writeln!(sudoers, "{} ALL=(ALL) NOPASSWD: ALL", user.name)
+            .map_err(|err| format!("Error: failed to update /etc/sudoers: {err}"))?;
+    } else {
+        eprintln!("Warning: /etc/sudoers not found; skipping sudoers update");
+    }
 
     Ok(())
 }
 
 fn run_command_ignore(cmd: &str, args: &[&str]) {
     let _ = Command::new(cmd).args(args).status();
+}
+
+fn ensure_home_dir(user: &internal::UserSpec) -> Result<(), String> {
+    fs::create_dir_all(&user.home).map_err(|err| {
+        format!(
+            "Error: failed to create home {}: {err}",
+            user.home.display()
+        )
+    })?;
+    let mut perms = fs::metadata(&user.home)
+        .map_err(|err| format!("Error: failed to read {}: {err}", user.home.display()))?
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&user.home, perms).map_err(|err| {
+        format!(
+            "Error: failed to set permissions on {}: {err}",
+            user.home.display()
+        )
+    })?;
+    chown_path(&user.home, user.uid, user.gid)?;
+    Ok(())
+}
+
+fn chown_path(path: &Path, uid: u32, gid: u32) -> Result<(), String> {
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        format!(
+            "Error: invalid path contains NUL byte: {}",
+            path.display()
+        )
+    })?;
+    unsafe {
+        if libc::chown(c_path.as_ptr(), uid as libc::uid_t, gid as libc::gid_t) != 0 {
+            return Err(format!(
+                "Error: failed to chown {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn drop_privileges(uid: u32, gid: u32) -> Result<(), String> {

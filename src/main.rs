@@ -217,10 +217,7 @@ fn run() -> Result<(), String> {
         shell: None,
         extra_shell: extra_shell_path,
         prefix_cmd: params.get("prefix_cmd").cloned().unwrap_or_default(),
-        prefix_cmd_quiet: params
-            .get("prefix_cmd_quiet")
-            .cloned()
-            .unwrap_or_default(),
+        prefix_cmd_quiet: params.get("prefix_cmd_quiet").cloned().unwrap_or_default(),
     };
 
     let internal_spec_json = serde_json::to_string(&internal_spec)
@@ -406,7 +403,10 @@ fn resolve_giftwrap_mount(
             if value_path.is_absolute() {
                 (value_path.clone(), Some(value_path))
             } else {
-                (mount_target.join(value), Some(resolve_real_path(value, root_dir)))
+                (
+                    mount_target.join(value),
+                    Some(resolve_real_path(value, root_dir)),
+                )
             }
         }
         None => {
@@ -415,9 +415,13 @@ fn resolve_giftwrap_mount(
         }
     };
 
-    let hint_source = hint
-        .as_ref()
-        .and_then(|path| if path.is_file() { Some(path.clone()) } else { None });
+    let hint_source = hint.as_ref().and_then(|path| {
+        if path.is_file() {
+            Some(path.clone())
+        } else {
+            None
+        }
+    });
     let host_source = if agent_override.is_none() {
         find_musl_binary(root_dir, "giftwrap")
             .or_else(|| hint_source.clone())
@@ -446,10 +450,7 @@ fn resolve_giftwrap_mount(
 
 fn find_musl_binary(root_dir: &Path, binary: &str) -> Option<PathBuf> {
     let target_root = root_dir.join("target");
-    let preferred = target_root.join(format!(
-        "{}-unknown-linux-musl",
-        std::env::consts::ARCH
-    ));
+    let preferred = target_root.join(format!("{}-unknown-linux-musl", std::env::consts::ARCH));
     if let Some(found) = find_musl_binary_in_target(&preferred, binary) {
         return Some(found);
     }
@@ -561,5 +562,165 @@ fn format_exit_status(status: &std::process::ExitStatus) -> String {
     match status.code() {
         Some(code) => code.to_string(),
         None => "signal".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        abs_path, expand_share, mkhostname, parse_share, resolve_path, resolve_real_path,
+        share_git_dir,
+    };
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().expect("env lock poisoned")
+    }
+
+    fn git_available() -> bool {
+        Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn mkhostname_sanitizes_and_truncates() {
+        let hostname = mkhostname("registry.local/org/my_app:latest");
+        assert_eq!(hostname, "my-app-latest");
+
+        let long = format!("repo/{}", "a".repeat(80));
+        let hostname = mkhostname(&long);
+        assert_eq!(hostname, "a".repeat(63));
+    }
+
+    #[test]
+    fn expand_share_resolves_env_and_literals() {
+        let _lock = lock_env();
+        let prior = std::env::var("GW_TEST_SHARE").ok();
+
+        unsafe {
+            std::env::set_var("GW_TEST_SHARE", "/tmp/share");
+        }
+        assert_eq!(
+            expand_share("$GW_TEST_SHARE").as_deref(),
+            Some("/tmp/share")
+        );
+
+        unsafe {
+            std::env::remove_var("GW_TEST_SHARE");
+        }
+        assert!(expand_share("$GW_TEST_SHARE").is_none());
+        assert_eq!(expand_share("literal").as_deref(), Some("literal"));
+
+        if let Some(value) = prior {
+            unsafe {
+                std::env::set_var("GW_TEST_SHARE", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("GW_TEST_SHARE");
+            }
+        }
+    }
+
+    #[test]
+    fn parse_share_defaults_target_to_source() {
+        let root = TempDir::new().expect("tempdir");
+        let mount = parse_share("src", root.path()).expect("parse_share failed");
+        let expected = root.path().join("src");
+        assert_eq!(mount.source, expected);
+        assert_eq!(mount.target, expected);
+        assert!(!mount.read_only);
+        assert!(mount.options.is_empty());
+    }
+
+    #[test]
+    fn parse_share_parses_target_and_options() {
+        let root = TempDir::new().expect("tempdir");
+        let mount = parse_share("src:/dest:ro,z", root.path()).expect("parse_share failed");
+        assert_eq!(mount.source, root.path().join("src"));
+        assert_eq!(mount.target, PathBuf::from("/dest"));
+        assert_eq!(mount.options, vec!["ro".to_string(), "z".to_string()]);
+    }
+
+    #[test]
+    fn abs_and_resolve_path_keep_absolute_or_join_root() {
+        let root = TempDir::new().expect("tempdir");
+        assert_eq!(abs_path("rel", root.path()), root.path().join("rel"));
+        assert_eq!(resolve_path("rel", root.path()), root.path().join("rel"));
+        assert_eq!(abs_path("/abs", root.path()), PathBuf::from("/abs"));
+    }
+
+    #[test]
+    fn resolve_real_path_returns_candidate_on_missing() {
+        let root = TempDir::new().expect("tempdir");
+        assert_eq!(
+            resolve_real_path("missing", root.path()),
+            root.path().join("missing")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_real_path_canonicalizes_symlinks() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let root = TempDir::new().expect("tempdir");
+        let real = root.path().join("real");
+        fs::create_dir(&real).expect("create real dir");
+        let link = root.path().join("link");
+        symlink(&real, &link).expect("symlink");
+
+        let resolved = resolve_real_path("link", root.path());
+        assert_eq!(resolved, real.canonicalize().expect("canonicalize"));
+    }
+
+    #[test]
+    fn share_git_dir_skips_repo_inside_root() {
+        if !git_available() {
+            return;
+        }
+
+        let root = TempDir::new().expect("tempdir");
+        let status = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root.path())
+            .status()
+            .expect("git init failed");
+        assert!(status.success());
+
+        let mount = share_git_dir(root.path());
+        assert!(mount.is_none());
+    }
+
+    #[test]
+    fn share_git_dir_mounts_external_gitdir() {
+        if !git_available() {
+            return;
+        }
+
+        let root = TempDir::new().expect("tempdir");
+        let git_dir = TempDir::new().expect("tempdir");
+        let status = Command::new("git")
+            .args(["init", "-q", "--separate-git-dir"])
+            .arg(git_dir.path())
+            .current_dir(root.path())
+            .status()
+            .expect("git init failed");
+        assert!(status.success());
+
+        let mount = share_git_dir(root.path()).expect("expected external git dir mount");
+        assert_eq!(mount.source, git_dir.path());
+        assert_eq!(mount.target, git_dir.path());
+        assert!(!mount.read_only);
+        assert!(mount.options.is_empty());
     }
 }

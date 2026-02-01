@@ -27,6 +27,8 @@ pub struct CliOptions {
     pub extra_args: Vec<String>,
     /// Runtime args provided before the `--` delimiter.
     pub runtime_args: Vec<String>,
+    /// Enable verbose logging with timestamps.
+    pub verbose: bool,
 }
 
 /// User command captured after the `--` delimiter (or remaining args).
@@ -64,6 +66,7 @@ pub fn parse_args(args: &[String]) -> Result<(CliOptions, UserCommand), CliError
     let mut no_auto_build = false;
     let mut extra_args = Vec::new();
     let mut runtime_args = Vec::new();
+    let mut verbose = false;
 
     let mut idx = 0;
     let mut terminal_action = false;
@@ -89,6 +92,8 @@ pub fn parse_args(args: &[String]) -> Result<(CliOptions, UserCommand), CliError
             rebuild = true;
         } else if arg == "--gw-no-auto-build" {
             no_auto_build = true;
+        } else if arg == "--gw-verbose" {
+            verbose = true;
         } else if let Some(rest) = arg.strip_prefix("--gw-extra-args=") {
             let parts = shell_words::split(rest).map_err(|err| {
                 CliError::new(format!("Error: failed to parse --gw-extra-args: {err}"))
@@ -132,6 +137,7 @@ pub fn parse_args(args: &[String]) -> Result<(CliOptions, UserCommand), CliError
             no_auto_build,
             extra_args,
             runtime_args,
+            verbose,
         },
         UserCommand { argv: user_cmd },
     ))
@@ -164,6 +170,7 @@ mod tests {
         assert!(!opts.no_auto_build);
         assert!(opts.extra_args.is_empty());
         assert!(opts.runtime_args.is_empty());
+        assert!(!opts.verbose);
         assert!(cmd.argv.is_empty());
     }
 
@@ -236,6 +243,14 @@ mod tests {
         assert_eq!(opts.action, CliAction::Run);
         assert!(!opts.rebuild);
         assert!(opts.no_auto_build);
+        assert_eq!(cmd.argv, vec!["true"]);
+    }
+
+    #[test]
+    fn parse_verbose_flag() {
+        let (opts, cmd) = parse(&["--gw-verbose", "--", "true"]);
+        assert_eq!(opts.action, CliAction::Run);
+        assert!(opts.verbose);
         assert_eq!(cmd.argv, vec!["true"]);
     }
 

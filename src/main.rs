@@ -9,6 +9,31 @@ mod podman_cli;
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Clone, Copy)]
+struct VerboseLogger {
+    enabled: bool,
+}
+
+impl VerboseLogger {
+    fn new(enabled: bool) -> Self {
+        Self { enabled }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn log<F>(&self, f: F)
+    where
+        F: FnOnce() -> String,
+    {
+        if self.enabled {
+            eprintln!("[{}] {}", format_timestamp(), f());
+        }
+    }
+}
 
 fn main() {
     if let Err(message) = run() {
@@ -30,9 +55,33 @@ fn run() -> Result<(), String> {
     let orig_cwd =
         env::current_dir().map_err(|err| format!("Error: failed to resolve cwd: {err}"))?;
     let (cli_opts, user_cmd) = cli::parse_args(&args).map_err(|err| err.to_string())?;
+    let verbose = VerboseLogger::new(cli_opts.verbose);
+    verbose.log(|| format!("args: {}", format_arg_list(&args)));
+    verbose.log(|| format!("cwd: {}", orig_cwd.display()));
+    verbose.log(|| {
+        format!(
+            "cli: action={:?} rebuild={} no_auto_build={} use_ctx={:?} override_image={:?} extra_args={} runtime_args={} user_cmd={}",
+            cli_opts.action,
+            cli_opts.rebuild,
+            cli_opts.no_auto_build,
+            cli_opts.use_ctx,
+            cli_opts.override_image,
+            format_arg_list(&cli_opts.extra_args),
+            format_arg_list(&cli_opts.runtime_args),
+            format_arg_list(&user_cmd.argv)
+        )
+    });
 
     let config = config::load_from(&orig_cwd).map_err(|err| err.to_string())?;
     let root_dir = config.root_dir.clone();
+    verbose.log(|| format!("config: {}", config.config_path.display()));
+    verbose.log(|| format!("config: root_dir {}", root_dir.display()));
+    if let Some(uuid) = &config.uuid {
+        verbose.log(|| format!("config: uuid {uuid}"));
+    }
+    let mut param_keys = config.params.keys().cloned().collect::<Vec<_>>();
+    param_keys.sort();
+    verbose.log(|| format!("config: params keys={param_keys:?}"));
     env::set_current_dir(&root_dir)
         .map_err(|err| format!("Error: failed to enter build root: {err}"))?;
 
@@ -42,8 +91,24 @@ fn run() -> Result<(), String> {
         .or_insert_with(Vec::new);
 
     let context = context::load_from_config(&root_dir, &params).map_err(|err| err.to_string())?;
+    match &context {
+        Some(ctx) => {
+            verbose.log(|| {
+                format!(
+                    "context: sha_file={} files={} sha={}",
+                    ctx.sha_file.display(),
+                    ctx.files.len(),
+                    ctx.sha
+                )
+            });
+        }
+        None => {
+            verbose.log(|| "context: disabled".to_string());
+        }
+    }
     let mut ctx_sha = context.as_ref().map(|ctx| ctx.sha.clone());
     if let Some(forced) = &cli_opts.use_ctx {
+        verbose.log(|| format!("context: overriding sha to {forced}"));
         if context.is_none() {
             return Err("Error: context sha us unused by this configuration".to_string());
         }
@@ -51,6 +116,7 @@ fn run() -> Result<(), String> {
     }
 
     if matches!(cli_opts.action, cli::CliAction::PrintContext) {
+        verbose.log(|| "action: print context sha".to_string());
         if let Some(sha) = ctx_sha {
             println!("{sha}");
             return Ok(());
@@ -63,33 +129,55 @@ fn run() -> Result<(), String> {
         ctx_sha.as_deref(),
         cli_opts.override_image.as_deref(),
     )?;
+    verbose.log(|| format!("image: {image}"));
 
     if matches!(cli_opts.action, cli::CliAction::PrintImage) {
+        verbose.log(|| "action: print image".to_string());
         println!("{image}");
         return Ok(());
     }
 
     if matches!(cli_opts.action, cli::CliAction::ShowConfig) {
+        verbose.log(|| "action: show config".to_string());
         println!("{:#?}", params);
         return Ok(());
     }
 
     if matches!(cli_opts.action, cli::CliAction::Help) {
+        verbose.log(|| "action: help".to_string());
         print_help();
         return Ok(());
     }
 
     if let Some(hook) = params.get("prelaunch_hook") {
+        if !hook.is_empty() {
+            verbose.log(|| format!("prelaunch_hook: {}", format_arg_list(hook)));
+        }
         run_hook(hook, &root_dir)?;
     }
 
     let auto_build = !cli_opts.no_auto_build;
     let image_exists = if cli_opts.rebuild || !auto_build {
+        verbose.log(|| {
+            format!(
+                "image check: skipped (rebuild={} auto_build={})",
+                cli_opts.rebuild, auto_build
+            )
+        });
         true
     } else {
+        verbose.log(|| format!("image check: podman image exists {image}"));
         exec::image_exists(&image).map_err(|err| err.to_string())?
     };
+    verbose.log(|| format!("image exists: {image_exists}"));
     if let Some(rebuild_image) = rebuild_plan(cli_opts.rebuild, auto_build, image_exists, &image) {
+        verbose.log(|| {
+            format!(
+                "image build: podman build -t {} {}",
+                rebuild_image,
+                root_dir.display()
+            )
+        });
         println!("Rebuilding container {rebuild_image}");
         exec::build_image(&rebuild_image, &root_dir).map_err(|err| err.to_string())?;
     }
@@ -104,8 +192,15 @@ fn run() -> Result<(), String> {
     let stdout_tty = std::io::stdout().is_terminal();
     let interactive = true;
     let tty = stdin_tty && stdout_tty;
+    verbose.log(|| {
+        format!(
+            "terminal: stdin_tty={} stdout_tty={} interactive={} tty={}",
+            stdin_tty, stdout_tty, interactive, tty
+        )
+    });
     let mut terminfo = None;
     if tty && let Ok(term) = env::var("TERM") {
+        verbose.log(|| format!("terminfo: loading for TERM={term}"));
         env_overrides.insert("TERM".to_string(), term.clone());
         terminfo = Some(load_terminfo(&term)?);
     }
@@ -117,6 +212,10 @@ fn run() -> Result<(), String> {
             }
         }
     }
+    verbose.log(|| {
+        let keys = env_overrides.keys().cloned().collect::<Vec<_>>();
+        format!("env overrides: keys={keys:?}")
+    });
 
     let mut mounts = Vec::new();
     let mut mount_target = root_dir.clone();
@@ -128,6 +227,13 @@ fn run() -> Result<(), String> {
     if let Some(cd_override) = params.get("cd_to").and_then(|vals| vals.first()) {
         cd_to = PathBuf::from(cd_override);
     }
+    verbose.log(|| {
+        format!(
+            "paths: mount_target={} cd_to={}",
+            mount_target.display(),
+            cd_to.display()
+        )
+    });
     mounts.push(internal::Mount {
         source: root_dir.clone(),
         target: mount_target.clone(),
@@ -170,12 +276,25 @@ fn run() -> Result<(), String> {
         .map(|val| val.as_str());
     let (agent_source, agent_target) =
         resolve_giftwrap_mount(agent_override, &root_dir, &mount_target)?;
+    verbose.log(|| {
+        format!(
+            "agent: source={} target={}",
+            agent_source.display(),
+            agent_target.display()
+        )
+    });
     mounts.push(internal::Mount {
         source: agent_source,
         target: agent_target.clone(),
         read_only: true,
         options: Vec::new(),
     });
+    if verbose.enabled() {
+        verbose.log(|| format!("mounts: {}", mounts.len()));
+        for mount in &mounts {
+            verbose.log(|| format!("mount: {}", format_mount(mount)));
+        }
+    }
 
     let mut extra_args = cli_opts.extra_args.clone();
     let mut config_extra_args = params.get("extra_args").cloned().unwrap_or_default();
@@ -183,6 +302,7 @@ fn run() -> Result<(), String> {
         config_extra_args.extend(cli_opts.runtime_args.clone());
     }
     extra_args.extend(config_extra_args);
+    verbose.log(|| format!("extra args: {}", format_arg_list(&extra_args)));
 
     let uid = unsafe { libc::getuid() } as u32;
     let gid = unsafe { libc::getgid() } as u32;
@@ -197,6 +317,36 @@ fn run() -> Result<(), String> {
         uid,
         gid,
     );
+    verbose.log(|| {
+        let persist = internal_spec
+            .persist_env
+            .as_ref()
+            .map(|spec| spec.path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<none>".to_string());
+        format!(
+            "internal spec: workdir={} user={} uid={} gid={} persist_env={persist}",
+            internal_spec.workdir.display(),
+            internal_spec.user.name,
+            internal_spec.user.uid,
+            internal_spec.user.gid
+        )
+    });
+    verbose.log(|| {
+        format!(
+            "internal spec: command={} prefix_cmd={} prefix_cmd_quiet={}",
+            format_arg_list(&internal_spec.command),
+            format_arg_list(&internal_spec.prefix_cmd),
+            format_arg_list(&internal_spec.prefix_cmd_quiet)
+        )
+    });
+    verbose.log(|| {
+        let extra_shell = internal_spec
+            .extra_shell
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<none>".to_string());
+        format!("internal spec: extra_shell={extra_shell}")
+    });
 
     let internal_spec_json = serde_json::to_string(&internal_spec)
         .map_err(|err| format!("Error: failed to serialize internal spec: {err}"))?;
@@ -224,17 +374,52 @@ fn run() -> Result<(), String> {
         command: vec!["agent".to_string()],
         extra_args,
     };
+    verbose.log(|| {
+        format!(
+            "container: image={} hostname={} interactive={} tty={} user=root",
+            container_spec.image,
+            container_spec
+                .hostname
+                .as_deref()
+                .unwrap_or("<none>"),
+            container_spec.interactive,
+            container_spec.tty
+        )
+    });
+    verbose.log(|| {
+        format!(
+            "container: entrypoint={} command={} extra_hosts={}",
+            container_spec
+                .entrypoint
+                .as_ref()
+                .map(|vals| format_arg_list(vals))
+                .unwrap_or_else(|| "<none>".to_string()),
+            format_arg_list(&container_spec.command),
+            format_arg_list(&container_spec.extra_hosts)
+        )
+    });
+
+    let podman_args = if verbose.enabled() || matches!(cli_opts.action, cli::CliAction::PrintCommand) {
+        Some(podman_cli::build_run_args(&container_spec).map_err(|err| err.to_string())?)
+    } else {
+        None
+    };
+
+    if let Some(args) = &podman_args {
+        verbose.log(|| format!("podman run: {}", format_command_line("podman", args)));
+    }
 
     if matches!(cli_opts.action, cli::CliAction::PrintCommand) {
         let mut cmd = vec!["podman".to_string()];
-        let args = podman_cli::build_run_args(&container_spec).map_err(|err| err.to_string())?;
-        cmd.extend(args);
+        let args = podman_args.as_ref().expect("podman args missing");
+        cmd.extend(args.iter().cloned());
         for arg in cmd {
             println!("++++ {arg}");
         }
         return Ok(());
     }
 
+    verbose.log(|| "exec: handoff to podman".to_string());
     exec::run_container(&container_spec).map_err(|err| err.to_string())
 }
 
@@ -251,6 +436,7 @@ GW Flags:
     no-auto-build: disable auto rebuild when image is missing
     show-config: dump the parameters
     extra-args: add extra args to the runtime invocation
+    verbose: enable verbose logging with timestamps
 "#
     );
 }
@@ -631,6 +817,58 @@ fn format_exit_status(status: &std::process::ExitStatus) -> String {
         Some(code) => code.to_string(),
         None => "signal".to_string(),
     }
+}
+
+fn format_timestamp() -> String {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => format!("{}.{:03}", duration.as_secs(), duration.subsec_millis()),
+        Err(_) => "0.000".to_string(),
+    }
+}
+
+fn shell_escape(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    let escaped = value.replace('\'', "'\"'\"'");
+    format!("'{escaped}'")
+}
+
+fn format_arg_list(args: &[String]) -> String {
+    if args.is_empty() {
+        return "<none>".to_string();
+    }
+    args.iter()
+        .map(|arg| shell_escape(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_command_line(binary: &str, args: &[String]) -> String {
+    let mut parts = Vec::with_capacity(args.len() + 1);
+    parts.push(shell_escape(binary));
+    for arg in args {
+        parts.push(shell_escape(arg));
+    }
+    parts.join(" ")
+}
+
+fn format_mount(mount: &internal::Mount) -> String {
+    let mut options = mount.options.clone();
+    if mount.read_only && !options.iter().any(|opt| opt == "ro") {
+        options.push("ro".to_string());
+    }
+    let options = if options.is_empty() {
+        "<none>".to_string()
+    } else {
+        options.join(",")
+    };
+    format!(
+        "{} -> {} (options={})",
+        mount.source.display(),
+        mount.target.display(),
+        options
+    )
 }
 
 #[cfg(test)]

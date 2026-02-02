@@ -9,7 +9,7 @@
 
 ## Key behaviors to preserve (high level)
 - Parse the config file into parameters; allow environment variables to add/set/delete options.
-- Optional context SHA tagging based on `.gwinclude.toml` selection rules.
+- Optional context SHA tagging based on `gw_context_rules` in `.giftwrap.toml`.
 - `--gw-*` flags for printing, rebuilding, overriding image/tag, extra runtime args, config dump, etc.
 - Compose the runtime invocation (rootless by default) with mounts of the build root, extra shares, and optional git-dir sharing.
 - Optional prelaunch hook, extra shell sourcing, and prefix commands.

@@ -1,2 +1,6 @@
 gw_container = "gwcontainer"
 version_by_build_context = ".gwcontext"
+gw_context_rules = [
+  "Containerfile",
+  "stunt_file",
+]

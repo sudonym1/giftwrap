@@ -21,7 +21,7 @@
     - Apply `GW_USER_OPT_{SET,ADD,DEL}_*` environment overrides (replacement for legacy `DR_USER_OPT_{SET,ADD,DEL}_*`), with UUID scoping.
     - Output: `Config`.
   - `context`
-    - Git-style file selection + `.gwinclude.toml` (top-level and nested) semantics + context SHA + SHA file management.
+    - Git-style file selection + `gw_context_rules` in `.giftwrap.toml` + context SHA + SHA file management.
     - Output: `ContextSha` + file list metadata.
   - `cli`
     - Parse `--gw-*` flags (replacement for legacy `--dr-*`) and split runtime args vs user command via `--` delimiter.
@@ -80,7 +80,7 @@
 ## Behavior parity targets
 - Preserve all `--gw-*` flags (replacement for legacy `--dr-*`):
   - print, ctx, print-image, use-ctx, img, rebuild, show-config, extra-args, help.
-- Maintain build-context SHA tagging behavior with `.gwinclude.toml` selection rules.
+- Maintain build-context SHA tagging behavior with `gw_context_rules` in `.giftwrap.toml`.
 - Preserve shared mount semantics and optional git-dir sharing.
 - Preserve persisted environment behavior (new implementation but same semantics).
 
@@ -89,7 +89,7 @@
 - Shared internal data models defined once and used by both host + agent.
 - Config discovery/parsing + GW_USER_OPT_* environment overrides implemented.
 - CLI flag parsing implemented (including `--` split handling).
-- Context module implemented (gwinclude-only selection + SHA + sha-file reuse).
+- Context module implemented (config-driven selection + SHA + sha-file reuse).
 - Config discovery now uses `.giftwrap.toml`, and config keys are prefixed with `gw` where applicable.
 - Runtime CLI wrapper implemented with build/inspect/run and exec wiring.
 - CLI now composes a minimal runtime run from config/flags and executes it.
@@ -99,7 +99,7 @@
 ## Next steps (implementation sequence)
 - [x] Define shared data models: `Config`, `CliOptions`, `RunSpec`, `InternalSpec`, `ContainerSpec`.
 - [x] Implement `config` and `cli` modules to match legacy behavior.
-- [x] Implement `context` module to match git-style file selection + `.gwinclude.toml` semantics + SHA logic.
+- [x] Implement `context` module to match git-style file selection + `gw_context_rules` semantics + SHA logic.
 - [x] Implement agent runtime pieces (user setup, env handling, exec).
 - [x] Collapse workspace to a single top-level `giftwrap` crate.
 - [x] Move current `giftwrap` crate contents to repo root crate.

@@ -3,7 +3,6 @@ use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use toml::Value;
 
 use sha1::{Digest, Sha1};
 
@@ -14,7 +13,7 @@ pub struct ContextSha {
     pub sha_file: PathBuf,
 }
 
-const GWINCLUDE_NAME: &str = ".gwinclude.toml";
+const CONFIG_NAME: &str = ".giftwrap.toml";
 
 #[derive(Debug)]
 pub struct ContextError {
@@ -64,22 +63,31 @@ pub fn load_from_config(
     };
     if ctx.len() != 1 {
         return Err(ContextError::new(
-            "Error: version_by_build_context requires a .gwinclude.toml file",
+            "Error: version_by_build_context requires a single sha file path",
         ));
     }
+    let Some(rules) = params.get("gw_context_rules") else {
+        return Err(ContextError::new(
+            "Error: version_by_build_context requires gw_context_rules in .giftwrap.toml",
+        ));
+    };
 
     let sha_file = root_dir.join(&ctx[0]);
-    let context = build_context_sha(root_dir, &sha_file)?;
+    let context = build_context_sha(root_dir, &sha_file, rules)?;
     Ok(Some(context))
 }
 
-pub fn build_context_sha(root_dir: &Path, sha_file: &Path) -> Result<ContextSha, ContextError> {
+pub fn build_context_sha(
+    root_dir: &Path,
+    sha_file: &Path,
+    rules: &[String],
+) -> Result<ContextSha, ContextError> {
     let sha_file = if sha_file.is_absolute() {
         sha_file.to_path_buf()
     } else {
         root_dir.join(sha_file)
     };
-    let files = build_gwinclude_file_list(root_dir)?;
+    let files = build_context_file_list(root_dir, rules)?;
 
     let dirty = is_sha_file_dirty(&sha_file, &files, root_dir)?;
     let sha = if dirty {
@@ -97,14 +105,12 @@ pub fn build_context_sha(root_dir: &Path, sha_file: &Path) -> Result<ContextSha,
     })
 }
 
-fn build_gwinclude_file_list(root_dir: &Path) -> Result<Vec<String>, ContextError> {
-    let (files, gwincludes) = collect_files(root_dir)?;
-    if gwincludes.is_empty() {
-        return Err(ContextError::new(
-            "Error: version_by_build_context requires a .gwinclude.toml file",
-        ));
-    }
-    let patterns = parse_gwinclude_files(root_dir, &gwincludes)?;
+fn build_context_file_list(
+    root_dir: &Path,
+    rules: &[String],
+) -> Result<Vec<String>, ContextError> {
+    let files = collect_files(root_dir)?;
+    let patterns = parse_rules(rules);
 
     let mut selected = BTreeSet::new();
     for rel_path in &files {
@@ -123,26 +129,18 @@ fn build_gwinclude_file_list(root_dir: &Path) -> Result<Vec<String>, ContextErro
         }
     }
 
-    for gw in &gwincludes {
-        selected.insert(path_to_slash(gw));
-    }
+    selected.insert(CONFIG_NAME.to_string());
 
     Ok(selected.into_iter().collect())
 }
 
-fn collect_files(root_dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), ContextError> {
+fn collect_files(root_dir: &Path) -> Result<Vec<PathBuf>, ContextError> {
     let mut files = Vec::new();
-    let mut gwincludes = Vec::new();
-    walk_dir(root_dir, root_dir, &mut files, &mut gwincludes)?;
-    Ok((files, gwincludes))
+    walk_dir(root_dir, root_dir, &mut files)?;
+    Ok(files)
 }
 
-fn walk_dir(
-    root_dir: &Path,
-    dir: &Path,
-    files: &mut Vec<PathBuf>,
-    gwincludes: &mut Vec<PathBuf>,
-) -> Result<(), ContextError> {
+fn walk_dir(root_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), ContextError> {
     for entry in fs::read_dir(dir).map_err(|err| {
         ContextError::new(format!(
             "Error: failed to read directory {}: {err}",
@@ -164,7 +162,7 @@ fn walk_dir(
         })?;
 
         if file_type.is_dir() {
-            walk_dir(root_dir, &path, files, gwincludes)?;
+            walk_dir(root_dir, &path, files)?;
         } else if file_type.is_file() || file_type.is_symlink() {
             let rel = path
                 .strip_prefix(root_dir)
@@ -175,113 +173,51 @@ fn walk_dir(
                     ))
                 })?
                 .to_path_buf();
-            if rel
-                .file_name()
-                .map(|name| name == GWINCLUDE_NAME)
-                .unwrap_or(false)
-            {
-                gwincludes.push(rel.clone());
-            }
             files.push(rel);
         }
     }
     Ok(())
 }
 
-fn parse_gwinclude_files(
-    root_dir: &Path,
-    gwincludes: &[PathBuf],
-) -> Result<Vec<GwPattern>, ContextError> {
-    let mut files = gwincludes.to_vec();
-    files.sort_by(|a, b| {
-        let depth_a = a.parent().map(path_depth).unwrap_or(0);
-        let depth_b = b.parent().map(path_depth).unwrap_or(0);
-        depth_a.cmp(&depth_b).then_with(|| a.cmp(b))
-    });
-
+fn parse_rules(rules: &[String]) -> Vec<GwPattern> {
     let mut patterns = Vec::new();
-    for rel in files {
-        let abs = root_dir.join(&rel);
-        let content = fs::read_to_string(&abs).map_err(|err| {
-            ContextError::new(format!(
-                "Error: failed to read gwinclude file {}: {err}",
-                abs.display()
-            ))
-        })?;
-        let value: Value = toml::from_str(&content).map_err(|err| {
-            ContextError::new(format!(
-                "Error: failed to parse gwinclude file {}: {err}",
-                abs.display()
-            ))
-        })?;
-        let table = value.as_table().ok_or_else(|| {
-            ContextError::new(format!(
-                "Error: gwinclude file {} must contain a TOML table",
-                abs.display()
-            ))
-        })?;
-        let rules = match table.get("rules") {
-            None => Vec::new(),
-            Some(Value::Array(items)) => {
-                let mut out = Vec::new();
-                for item in items {
-                    if let Value::String(rule) = item {
-                        out.push(rule.clone());
-                    } else {
-                        return Err(ContextError::new(format!(
-                            "Error: gwinclude file {} rules must be strings",
-                            abs.display()
-                        )));
-                    }
-                }
-                out
-            }
-            Some(_) => {
-                return Err(ContextError::new(format!(
-                    "Error: gwinclude file {} rules must be an array of strings",
-                    abs.display()
-                )));
-            }
-        };
-
-        let base_dir = rel.parent().unwrap_or(Path::new("")).to_path_buf();
-        for raw_line in rules {
-            let line = raw_line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let (include, pattern_raw) = if let Some(rest) = line.strip_prefix('!') {
-                (false, rest.trim())
-            } else {
-                (true, line)
-            };
-            let mut anchored = false;
-            let mut pattern = pattern_raw.to_string();
-            if let Some(rest) = pattern.strip_prefix('/') {
-                anchored = true;
-                pattern = rest.to_string();
-            }
-            let dir_only = pattern.ends_with('/');
-            if dir_only {
-                pattern.truncate(pattern.trim_end_matches('/').len());
-            }
-            if pattern.is_empty() {
-                continue;
-            }
-            let has_slash = pattern.contains('/');
-            let tokens = tokenize(&pattern);
-            patterns.push(GwPattern {
-                base_dir: base_dir.clone(),
-                include,
-                dir_only,
-                anchored,
-                has_slash,
-                tokens,
-            });
+    let base_dir = PathBuf::new();
+    for raw_line in rules {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
         }
+        let (include, pattern_raw) = if let Some(rest) = line.strip_prefix('!') {
+            (false, rest.trim())
+        } else {
+            (true, line)
+        };
+        let mut anchored = false;
+        let mut pattern = pattern_raw.to_string();
+        if let Some(rest) = pattern.strip_prefix('/') {
+            anchored = true;
+            pattern = rest.to_string();
+        }
+        let dir_only = pattern.ends_with('/');
+        if dir_only {
+            pattern.truncate(pattern.trim_end_matches('/').len());
+        }
+        if pattern.is_empty() {
+            continue;
+        }
+        let has_slash = pattern.contains('/');
+        let tokens = tokenize(&pattern);
+        patterns.push(GwPattern {
+            base_dir: base_dir.clone(),
+            include,
+            dir_only,
+            anchored,
+            has_slash,
+            tokens,
+        });
     }
 
-    Ok(patterns)
+    patterns
 }
 
 fn gw_pattern_matches(pattern: &GwPattern, rel_path: &Path) -> bool {
@@ -536,15 +472,12 @@ fn join_components(components: &[&str]) -> String {
     components.join("/")
 }
 
-fn path_depth(path: &Path) -> usize {
-    path.components().count()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{build_gwinclude_file_list, compute_sha, parse_gwinclude_files};
+    use super::{build_context_file_list, compute_sha, load_from_config};
+    use std::collections::HashMap;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use tempfile::tempdir;
 
     fn write_file(root: &Path, rel: &str, contents: &str) {
@@ -556,13 +489,15 @@ mod tests {
     }
 
     #[test]
-    fn build_gwinclude_file_list_applies_include_exclude_rules() {
+    fn build_context_file_list_applies_include_exclude_rules() {
         let temp = tempdir().unwrap();
-        write_file(
-            temp.path(),
-            ".gwinclude.toml",
-            "rules = [\n  \"/src/*.rs\",\n  \"build/\",\n  \"docs/*.md\",\n  \"!/docs/secret.md\",\n]\n",
-        );
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
+        let rules = vec![
+            "/src/*.rs".to_string(),
+            "build/".to_string(),
+            "docs/*.md".to_string(),
+            "!/docs/secret.md".to_string(),
+        ];
         write_file(temp.path(), "src/main.rs", "fn main() {}\n");
         write_file(temp.path(), "nested/src/other.rs", "fn other() {}\n");
         write_file(temp.path(), "build/output.log", "log\n");
@@ -572,10 +507,10 @@ mod tests {
         write_file(temp.path(), "nested/docs/extra.md", "extra\n");
         write_file(temp.path(), "notes.txt", "notes\n");
 
-        let files = build_gwinclude_file_list(temp.path()).unwrap();
+        let files = build_context_file_list(temp.path(), &rules).unwrap();
 
         let expected = vec![
-            ".gwinclude.toml",
+            ".giftwrap.toml",
             "build/output.log",
             "docs/readme.md",
             "nested/build/inner.txt",
@@ -585,37 +520,29 @@ mod tests {
     }
 
     #[test]
-    fn build_gwinclude_file_list_applies_nested_gwinclude_overrides() {
+    fn build_context_file_list_applies_rule_order_overrides() {
         let temp = tempdir().unwrap();
-        write_file(temp.path(), ".gwinclude.toml", "rules = [\"*.txt\"]\n");
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
+        let rules = vec!["*.txt".to_string(), "!secret.txt".to_string()];
         write_file(temp.path(), "notes.txt", "notes\n");
-        write_file(
-            temp.path(),
-            "nested/.gwinclude.toml",
-            "rules = [\"!secret.txt\"]\n",
-        );
         write_file(temp.path(), "nested/keep.txt", "keep\n");
         write_file(temp.path(), "nested/secret.txt", "secret\n");
 
-        let files = build_gwinclude_file_list(temp.path()).unwrap();
+        let files = build_context_file_list(temp.path(), &rules).unwrap();
 
-        let expected = vec![
-            ".gwinclude.toml",
-            "nested/.gwinclude.toml",
-            "nested/keep.txt",
-            "notes.txt",
-        ];
+        let expected = vec![".giftwrap.toml", "nested/keep.txt", "notes.txt"];
         assert_eq!(files, expected);
     }
 
     #[test]
     fn compute_sha_is_stable_and_changes_with_content() {
         let temp = tempdir().unwrap();
-        write_file(temp.path(), ".gwinclude.toml", "rules = [\"*.txt\"]\n");
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
+        let rules = vec!["*.txt".to_string()];
         write_file(temp.path(), "a.txt", "alpha\n");
         write_file(temp.path(), "b.txt", "beta\n");
 
-        let files = build_gwinclude_file_list(temp.path()).unwrap();
+        let files = build_context_file_list(temp.path(), &rules).unwrap();
 
         let first = compute_sha(temp.path(), &files).unwrap();
         let second = compute_sha(temp.path(), &files).unwrap();
@@ -627,25 +554,20 @@ mod tests {
     }
 
     #[test]
-    fn build_gwinclude_file_list_errors_without_gwinclude() {
+    fn load_from_config_errors_without_context_rules() {
         let temp = tempdir().unwrap();
-        write_file(temp.path(), "a.txt", "alpha\n");
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
 
-        let err = build_gwinclude_file_list(temp.path()).unwrap_err();
+        let mut params = HashMap::new();
+        params.insert(
+            "version_by_build_context".to_string(),
+            vec![".ctx".to_string()],
+        );
+
+        let err = load_from_config(temp.path(), &params).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Error: version_by_build_context requires a .gwinclude.toml file"
+            "Error: version_by_build_context requires gw_context_rules in .giftwrap.toml"
         );
-    }
-
-    #[test]
-    fn parse_gwinclude_files_errors_on_missing_file() {
-        let temp = tempdir().unwrap();
-        let missing = PathBuf::from("missing/.gwinclude.toml");
-
-        let err = parse_gwinclude_files(temp.path(), &[missing]).unwrap_err();
-        assert!(err
-            .to_string()
-            .starts_with("Error: failed to read gwinclude file "));
     }
 }

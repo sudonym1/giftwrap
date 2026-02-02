@@ -47,7 +47,7 @@ boundaries and fixtures.
    - Precedence (config vs env vs CLI)
 
 6. Context hashing
-   - `.gwinclude.toml` inclusion/exclusion rules
+   - `gw_context_rules` inclusion/exclusion rules (from `.giftwrap.toml`)
    - Deterministic ordering and hash stability
    - Error conditions (missing or malformed includes)
 

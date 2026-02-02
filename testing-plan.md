@@ -42,7 +42,7 @@ boundaries and fixtures.
    - Error paths when missing
 
 5. Config parsing + env overrides
-   - Key/value parsing
+   - TOML parsing (strings, arrays, and boolean flags)
    - Add/set/delete semantics via env vars
    - Precedence (config vs env vs CLI)
 
@@ -106,7 +106,7 @@ boundaries and fixtures.
 - Image override: `--gw-img` with a known small image.
 - Context tag: `--gw-use-ctx` produces a tag and runs the container.
 - Shares: host file visible inside container at expected mount.
-- Env overrides: `GIFTWRAP_SET_*` and `GIFTWRAP_DEL_*` reflected in `env` output.
+- Env overrides: `GW_USER_OPT_{SET,ADD,DEL}_*` reflected in `env` output.
 - Persisted env: round-trip across two runs using the persisted env file.
 - Prelaunch hook + extra shell: verify hooks run in order with trace output.
 - Git dir share: ensure `.git` is mounted when enabled.

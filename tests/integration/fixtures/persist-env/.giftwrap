@@ -1,3 +1,0 @@
-gw_container docker.io/library/debian:bookworm-slim
-env_overrides PERSIST_ME
-persist_environment persist/env.json

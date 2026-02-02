@@ -3,6 +3,7 @@ use std::env;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
+use toml::Value;
 
 /// Parsed configuration plus build-root discovery metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +39,7 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-const CONFIG_NAMES: [&str; 2] = [".giftwrap", "giftwrap"];
+const CONFIG_NAMES: [&str; 1] = [".giftwrap.toml"];
 const ENV_SET_PREFIX: &str = "GW_USER_OPT_SET_";
 const ENV_ADD_PREFIX: &str = "GW_USER_OPT_ADD_";
 const ENV_DEL_PREFIX: &str = "GW_USER_OPT_DEL_";
@@ -112,27 +113,49 @@ fn parse_config(config_path: &Path) -> Result<HashMap<String, Vec<String>>, Conf
         ))
     })?;
 
+    let value: Value = toml::from_str(&content).map_err(|err| {
+        ConfigError::new(format!(
+            "Error: failed to parse config file {}: {err}",
+            config_path.display()
+        ))
+    })?;
+
+    let table = value.as_table().ok_or_else(|| {
+        ConfigError::new(format!(
+            "Error: config file {} must contain a TOML table",
+            config_path.display()
+        ))
+    })?;
+
     let mut params = HashMap::new();
-    for (idx, raw_line) in content.lines().enumerate() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
+    for (key, value) in table {
+        match value {
+            Value::String(val) => {
+                params.insert(key.clone(), vec![val.clone()]);
+            }
+            Value::Array(values) => {
+                let mut out = Vec::new();
+                for item in values {
+                    if let Value::String(val) = item {
+                        out.push(val.clone());
+                    } else {
+                        return Err(ConfigError::new(format!(
+                            "Error: config key {key} must be a string or array of strings"
+                        )));
+                    }
+                }
+                params.insert(key.clone(), out);
+            }
+            Value::Boolean(true) => {
+                params.insert(key.clone(), Vec::new());
+            }
+            Value::Boolean(false) => {}
+            _ => {
+                return Err(ConfigError::new(format!(
+                    "Error: config key {key} must be a string, array of strings, or boolean"
+                )));
+            }
         }
-
-        let parts = shell_words::split(line).map_err(|err| {
-            ConfigError::new(format!(
-                "Error: failed to parse config line {}: {err}",
-                idx + 1
-            ))
-        })?;
-
-        if parts.is_empty() {
-            continue;
-        }
-
-        let key = parts[0].clone();
-        let values = parts[1..].to_vec();
-        params.insert(key, values);
     }
 
     Ok(params)
@@ -241,7 +264,7 @@ mod tests {
 
     fn write_config(dir: &Path, name: &str) {
         let path = dir.join(name);
-        fs::write(path, "gw_container test").unwrap();
+        fs::write(path, "gw_container = \"test\"\n").unwrap();
     }
 
     fn write_config_contents(dir: &Path, name: &str, contents: &str) {
@@ -250,21 +273,21 @@ mod tests {
     }
 
     #[test]
-    fn discover_config_finds_dot_giftwrap_in_start_dir() {
+    fn discover_config_finds_giftwrap_toml_in_start_dir() {
         let temp = tempfile::tempdir().unwrap();
-        write_config(temp.path(), ".giftwrap");
+        write_config(temp.path(), ".giftwrap.toml");
 
         let (root_dir, config_path) = discover_config(temp.path()).unwrap();
         let canonical_root = temp.path().canonicalize().unwrap();
 
         assert_eq!(root_dir, canonical_root);
-        assert_eq!(config_path, canonical_root.join(".giftwrap"));
+        assert_eq!(config_path, canonical_root.join(".giftwrap.toml"));
     }
 
     #[test]
     fn discover_config_walks_up_to_parent() {
         let temp = tempfile::tempdir().unwrap();
-        write_config(temp.path(), "giftwrap");
+        write_config(temp.path(), ".giftwrap.toml");
 
         let nested = temp.path().join("child/grandchild");
         fs::create_dir_all(&nested).unwrap();
@@ -273,20 +296,7 @@ mod tests {
         let canonical_root = temp.path().canonicalize().unwrap();
 
         assert_eq!(root_dir, canonical_root);
-        assert_eq!(config_path, canonical_root.join("giftwrap"));
-    }
-
-    #[test]
-    fn discover_config_prefers_dot_giftwrap_over_giftwrap() {
-        let temp = tempfile::tempdir().unwrap();
-        write_config(temp.path(), ".giftwrap");
-        write_config(temp.path(), "giftwrap");
-
-        let (root_dir, config_path) = discover_config(temp.path()).unwrap();
-        let canonical_root = temp.path().canonicalize().unwrap();
-
-        assert_eq!(root_dir, canonical_root);
-        assert_eq!(config_path, canonical_root.join(".giftwrap"));
+        assert_eq!(config_path, canonical_root.join(".giftwrap.toml"));
     }
 
     #[test]
@@ -299,16 +309,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_config_skips_comments_and_parses_values() {
+    fn parse_config_reads_strings_arrays_and_flags() {
         let temp = TempDir::new().unwrap();
-        let path = temp.path().join("giftwrap");
+        let path = temp.path().join(".giftwrap.toml");
         fs::write(
             &path,
             r#"
-# comment
-gw_container test
-extra_args "one two" three
-empty_key
+gw_container = "test"
+extra_args = ["one two", "three"]
+empty_key = []
+share_git_dir = true
+skip_flag = false
 "#,
         )
         .unwrap();
@@ -324,19 +335,35 @@ empty_key
             &vec!["one two".to_string(), "three".to_string()]
         );
         assert_eq!(params.get("empty_key").unwrap(), &Vec::<String>::new());
+        assert!(params.contains_key("share_git_dir"));
+        assert!(params.get("skip_flag").is_none());
     }
 
     #[test]
-    fn parse_config_reports_line_number_on_error() {
+    fn parse_config_reports_parse_error() {
         let temp = TempDir::new().unwrap();
-        let path = temp.path().join("giftwrap");
-        fs::write(&path, "gw_container test\nbad \"unterminated\n").unwrap();
+        let path = temp.path().join(".giftwrap.toml");
+        fs::write(&path, "gw_container = \"test\"\nextra_args = [").unwrap();
 
         let err = parse_config(&path).unwrap_err();
 
         assert!(err
             .to_string()
-            .starts_with("Error: failed to parse config line 2:"));
+            .starts_with("Error: failed to parse config file "));
+    }
+
+    #[test]
+    fn parse_config_reports_type_error() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".giftwrap.toml");
+        fs::write(&path, "gw_container = 123").unwrap();
+
+        let err = parse_config(&path).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Error: config key gw_container must be a string, array of strings, or boolean"
+        );
     }
 
     #[test]
@@ -422,8 +449,8 @@ empty_key
         let temp = TempDir::new().unwrap();
         write_config_contents(
             temp.path(),
-            ".giftwrap",
-            "gw_container test\nuuid 1234-5678\nextra_args base\n",
+            ".giftwrap.toml",
+            "gw_container = \"test\"\nuuid = \"1234-5678\"\nextra_args = [\"base\"]\n",
         );
         let _guard = EnvVarGuard::set("GW_USER_OPT_ADD_UUID_12345678_extra_args", "more");
 
@@ -439,7 +466,7 @@ empty_key
     #[test]
     fn load_from_errors_without_gw_container() {
         let temp = TempDir::new().unwrap();
-        write_config_contents(temp.path(), "giftwrap", "extra_args base\n");
+        write_config_contents(temp.path(), ".giftwrap.toml", "extra_args = [\"base\"]\n");
 
         let err = load_from(temp.path()).unwrap_err();
 
@@ -447,7 +474,7 @@ empty_key
             err.to_string(),
             format!(
                 "Error: gw_container must be specified in {}",
-                temp.path().join("giftwrap").display()
+                temp.path().join(".giftwrap.toml").display()
             )
         );
     }
@@ -457,8 +484,8 @@ empty_key
         let temp = TempDir::new().unwrap();
         write_config_contents(
             temp.path(),
-            "giftwrap",
-            "gw_container test\nprefix_cmd echo\nprefix_cmd_quiet echo\n",
+            ".giftwrap.toml",
+            "gw_container = \"test\"\nprefix_cmd = [\"echo\"]\nprefix_cmd_quiet = [\"echo\"]\n",
         );
 
         let err = load_from(temp.path()).unwrap_err();

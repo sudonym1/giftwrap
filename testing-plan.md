@@ -37,7 +37,7 @@ boundaries and fixtures.
    - share expansion, path resolution, git-dir sharing behavior
 
 4. Config discovery
-   - Search upward for `.giftwrap` or `giftwrap`
+   - Search upward for `.giftwrap.toml`
    - Build root selection from discovery
    - Error paths when missing
 
@@ -47,7 +47,7 @@ boundaries and fixtures.
    - Precedence (config vs env vs CLI)
 
 6. Context hashing
-   - `.gwinclude` inclusion/exclusion rules
+   - `.gwinclude.toml` inclusion/exclusion rules
    - Deterministic ordering and hash stability
    - Error conditions (missing or malformed includes)
 

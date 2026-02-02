@@ -1,12 +1,2 @@
-container_image = "ubuntu:latest"
-mount_to = "/workspace"
-cd_to = "/workspace/src"
-extra_shares = ["/home/user/.cache", "/tmp/build"]
-extra_hosts = ["host.docker.internal:host-gateway"]
-env_overrides = ["RUST_LOG=debug", "CARGO_TARGET_DIR=/tmp/build"]
-prefix_cmd = ["cargo", "build"]
-version_by_build_context = "v1.0.0"
-persist_environment = "/workspace/.env"
-uuid = "test-project-123"
-share_git_dir = true
-extra_shell = "/workspace/.shellrc"
+gw_container = "gwcontainer"
+version_by_build_context = ".gwcontext"

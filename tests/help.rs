@@ -6,8 +6,8 @@ use tempfile::TempDir;
 #[test]
 fn help_outputs_flags_with_minimal_config() {
     let dir = TempDir::new().expect("tempdir");
-    let config_path = dir.path().join(".giftwrap");
-    fs::write(&config_path, "gw_container test-image\n").expect("write config");
+    let config_path = dir.path().join(".giftwrap.toml");
+    fs::write(&config_path, "gw_container = \"test-image\"\n").expect("write config");
 
     let output = Command::new(env!("CARGO_BIN_EXE_giftwrap"))
         .arg("--gw-help")

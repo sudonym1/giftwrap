@@ -43,7 +43,7 @@ Each run writes artifacts under `artifacts/integration/<run-id>/`:
 - `basic-run`: minimal config + `echo ok`.
 - `auto-build`: auto-builds when the image is missing.
 - `image-override`: `--gw-img={{GW_IMAGE_ALT}}` override.
-- `context-tag`: `.gwinclude` + `--gw-use-ctx={{CTX_SHA}}`.
+- `context-tag`: `.gwinclude.toml` + `--gw-use-ctx={{CTX_SHA}}`.
 - `shares`: `extra_shares` mount verification.
 - `env-overrides`: config override via `GW_USER_OPT_SET_env_overrides` (legacy `GIFTWRAP_SET_*`).
 - `persist-env`: persisted environment round-trip across two runs.

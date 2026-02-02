@@ -5,11 +5,11 @@
 
 ## Source of truth for behavior
 - The legacy script in `inspiration/` is the reference implementation. Preserve its user-visible behavior unless the port explicitly modernizes or documents a change.
-- Config discovery searches upward from the current working directory for `.giftwrap` or `giftwrap` and uses that directory as the build root.
+- Config discovery searches upward from the current working directory for `.giftwrap.toml` and uses that directory as the build root.
 
 ## Key behaviors to preserve (high level)
 - Parse the config file into parameters; allow environment variables to add/set/delete options.
-- Optional context SHA tagging based on `.gwinclude` selection rules.
+- Optional context SHA tagging based on `.gwinclude.toml` selection rules.
 - `--gw-*` flags for printing, rebuilding, overriding image/tag, extra runtime args, config dump, etc.
 - Compose the runtime invocation (rootless by default) with mounts of the build root, extra shares, and optional git-dir sharing.
 - Optional prelaunch hook, extra shell sourcing, and prefix commands.

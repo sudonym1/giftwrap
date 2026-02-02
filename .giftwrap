@@ -1,4 +1,0 @@
-# giftwrap config
-
-gw_container gwcontainer
-version_by_build_context .gwcontext

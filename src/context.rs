@@ -3,6 +3,7 @@ use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use toml::Value;
 
 use sha1::{Digest, Sha1};
 
@@ -12,6 +13,8 @@ pub struct ContextSha {
     pub files: Vec<String>,
     pub sha_file: PathBuf,
 }
+
+const GWINCLUDE_NAME: &str = ".gwinclude.toml";
 
 #[derive(Debug)]
 pub struct ContextError {
@@ -61,7 +64,7 @@ pub fn load_from_config(
     };
     if ctx.len() != 1 {
         return Err(ContextError::new(
-            "Error: version_by_build_context requires a .gwinclude file",
+            "Error: version_by_build_context requires a .gwinclude.toml file",
         ));
     }
 
@@ -98,7 +101,7 @@ fn build_gwinclude_file_list(root_dir: &Path) -> Result<Vec<String>, ContextErro
     let (files, gwincludes) = collect_files(root_dir)?;
     if gwincludes.is_empty() {
         return Err(ContextError::new(
-            "Error: version_by_build_context requires a .gwinclude file",
+            "Error: version_by_build_context requires a .gwinclude.toml file",
         ));
     }
     let patterns = parse_gwinclude_files(root_dir, &gwincludes)?;
@@ -174,7 +177,7 @@ fn walk_dir(
                 .to_path_buf();
             if rel
                 .file_name()
-                .map(|name| name == ".gwinclude")
+                .map(|name| name == GWINCLUDE_NAME)
                 .unwrap_or(false)
             {
                 gwincludes.push(rel.clone());
@@ -205,11 +208,46 @@ fn parse_gwinclude_files(
                 abs.display()
             ))
         })?;
+        let value: Value = toml::from_str(&content).map_err(|err| {
+            ContextError::new(format!(
+                "Error: failed to parse gwinclude file {}: {err}",
+                abs.display()
+            ))
+        })?;
+        let table = value.as_table().ok_or_else(|| {
+            ContextError::new(format!(
+                "Error: gwinclude file {} must contain a TOML table",
+                abs.display()
+            ))
+        })?;
+        let rules = match table.get("rules") {
+            None => Vec::new(),
+            Some(Value::Array(items)) => {
+                let mut out = Vec::new();
+                for item in items {
+                    if let Value::String(rule) = item {
+                        out.push(rule.clone());
+                    } else {
+                        return Err(ContextError::new(format!(
+                            "Error: gwinclude file {} rules must be strings",
+                            abs.display()
+                        )));
+                    }
+                }
+                out
+            }
+            Some(_) => {
+                return Err(ContextError::new(format!(
+                    "Error: gwinclude file {} rules must be an array of strings",
+                    abs.display()
+                )));
+            }
+        };
 
         let base_dir = rel.parent().unwrap_or(Path::new("")).to_path_buf();
-        for raw_line in content.lines() {
+        for raw_line in rules {
             let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') {
+            if line.is_empty() {
                 continue;
             }
             let (include, pattern_raw) = if let Some(rest) = line.strip_prefix('!') {
@@ -522,8 +560,8 @@ mod tests {
         let temp = tempdir().unwrap();
         write_file(
             temp.path(),
-            ".gwinclude",
-            "# root includes\n/src/*.rs\nbuild/\ndocs/*.md\n!/docs/secret.md\n",
+            ".gwinclude.toml",
+            "rules = [\n  \"/src/*.rs\",\n  \"build/\",\n  \"docs/*.md\",\n  \"!/docs/secret.md\",\n]\n",
         );
         write_file(temp.path(), "src/main.rs", "fn main() {}\n");
         write_file(temp.path(), "nested/src/other.rs", "fn other() {}\n");
@@ -537,7 +575,7 @@ mod tests {
         let files = build_gwinclude_file_list(temp.path()).unwrap();
 
         let expected = vec![
-            ".gwinclude",
+            ".gwinclude.toml",
             "build/output.log",
             "docs/readme.md",
             "nested/build/inner.txt",
@@ -549,17 +587,21 @@ mod tests {
     #[test]
     fn build_gwinclude_file_list_applies_nested_gwinclude_overrides() {
         let temp = tempdir().unwrap();
-        write_file(temp.path(), ".gwinclude", "*.txt\n");
+        write_file(temp.path(), ".gwinclude.toml", "rules = [\"*.txt\"]\n");
         write_file(temp.path(), "notes.txt", "notes\n");
-        write_file(temp.path(), "nested/.gwinclude", "!secret.txt\n");
+        write_file(
+            temp.path(),
+            "nested/.gwinclude.toml",
+            "rules = [\"!secret.txt\"]\n",
+        );
         write_file(temp.path(), "nested/keep.txt", "keep\n");
         write_file(temp.path(), "nested/secret.txt", "secret\n");
 
         let files = build_gwinclude_file_list(temp.path()).unwrap();
 
         let expected = vec![
-            ".gwinclude",
-            "nested/.gwinclude",
+            ".gwinclude.toml",
+            "nested/.gwinclude.toml",
             "nested/keep.txt",
             "notes.txt",
         ];
@@ -569,7 +611,7 @@ mod tests {
     #[test]
     fn compute_sha_is_stable_and_changes_with_content() {
         let temp = tempdir().unwrap();
-        write_file(temp.path(), ".gwinclude", "*.txt\n");
+        write_file(temp.path(), ".gwinclude.toml", "rules = [\"*.txt\"]\n");
         write_file(temp.path(), "a.txt", "alpha\n");
         write_file(temp.path(), "b.txt", "beta\n");
 
@@ -592,14 +634,14 @@ mod tests {
         let err = build_gwinclude_file_list(temp.path()).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Error: version_by_build_context requires a .gwinclude file"
+            "Error: version_by_build_context requires a .gwinclude.toml file"
         );
     }
 
     #[test]
     fn parse_gwinclude_files_errors_on_missing_file() {
         let temp = tempdir().unwrap();
-        let missing = PathBuf::from("missing/.gwinclude");
+        let missing = PathBuf::from("missing/.gwinclude.toml");
 
         let err = parse_gwinclude_files(temp.path(), &[missing]).unwrap_err();
         assert!(err

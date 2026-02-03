@@ -95,10 +95,11 @@ fn run() -> Result<(), String> {
         Some(ctx) => {
             verbose.log(|| {
                 format!(
-                    "context: sha_file={} files={} sha={}",
+                    "context: sha_file={} files={} sha={} source={}",
                     ctx.sha_file.display(),
                     ctx.files.len(),
-                    ctx.sha
+                    ctx.sha,
+                    if ctx.cached { "cached" } else { "recalculated" }
                 )
             });
         }

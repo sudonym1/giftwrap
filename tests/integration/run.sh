@@ -106,6 +106,27 @@ read_lines() {
   done < "$file"
 }
 
+expect_contains() {
+  local label="$1"
+  local haystack="$2"
+  local patterns_file="$3"
+  local -a patterns=()
+
+  read_lines "$patterns_file" patterns
+  if [[ ${#patterns[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  local pattern
+  for pattern in "${patterns[@]}"; do
+    if ! grep -Fq -- "$pattern" "$haystack"; then
+      echo "Expected ${label} to contain: $pattern" >&2
+      echo "See $haystack" >&2
+      exit 1
+    fi
+  done
+}
+
 resolve_git_dir_path() {
   local raw
   raw=$(git -C "$ROOT_DIR" rev-parse --git-common-dir 2>/dev/null) || return 1
@@ -289,6 +310,9 @@ run_step() {
 
   local -a print_args=("--gw-print" "${args[@]}")
   run_with_env "$print_out" "$print_err" "$print_exit" "${env_vars[@]}" -- "${print_args[@]}"
+  if [[ -f "$step_dir/expect-runtime-args-stderr.txt" ]]; then
+    expect_contains "runtime-args stderr" "$print_err" "$step_dir/expect-runtime-args-stderr.txt"
+  fi
 
   local cfg_out="$step_out/config.json"
   local cfg_err="$step_out/config.stderr.txt"

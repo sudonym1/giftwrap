@@ -11,6 +11,7 @@ pub struct ContextSha {
     pub sha: String,
     pub files: Vec<String>,
     pub sha_file: PathBuf,
+    pub cached: bool,
 }
 
 const CONFIG_NAME: &str = ".giftwrap.toml";
@@ -102,6 +103,7 @@ pub fn build_context_sha(
         sha,
         files,
         sha_file,
+        cached: !dirty,
     })
 }
 
@@ -474,7 +476,7 @@ fn join_components(components: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_context_file_list, compute_sha, load_from_config};
+    use super::{build_context_file_list, build_context_sha, compute_sha, load_from_config};
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
@@ -569,5 +571,38 @@ mod tests {
             err.to_string(),
             "Error: version_by_build_context requires gw_context_rules in .giftwrap.toml"
         );
+    }
+
+    #[test]
+    fn build_context_sha_uses_cache_when_unchanged() {
+        let temp = tempdir().unwrap();
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
+        write_file(temp.path(), "data.txt", "alpha\n");
+        let rules = vec!["/data.txt".to_string()];
+        let sha_file = temp.path().join(".gwcontext");
+
+        let first = build_context_sha(temp.path(), &sha_file, &rules).unwrap();
+        assert!(!first.cached);
+
+        let second = build_context_sha(temp.path(), &sha_file, &rules).unwrap();
+        assert!(second.cached);
+        assert_eq!(first.sha, second.sha);
+    }
+
+    #[test]
+    fn build_context_sha_recalculates_when_file_list_changes() {
+        let temp = tempdir().unwrap();
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
+        write_file(temp.path(), "a.txt", "alpha\n");
+        let rules = vec!["*.txt".to_string()];
+        let sha_file = temp.path().join(".gwcontext");
+
+        let first = build_context_sha(temp.path(), &sha_file, &rules).unwrap();
+        assert!(!first.cached);
+
+        write_file(temp.path(), "b.txt", "beta\n");
+        let second = build_context_sha(temp.path(), &sha_file, &rules).unwrap();
+        assert!(!second.cached);
+        assert_ne!(first.sha, second.sha);
     }
 }

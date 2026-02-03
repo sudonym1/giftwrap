@@ -39,11 +39,15 @@ Each run writes artifacts under `artifacts/integration/<run-id>/`:
 - `runtime-args.txt` (from `--gw-print`)
 - `config.json` (from `--gw-show-config`)
 
+Optional step expectations:
+- `expect-runtime-args-stderr.txt`: lines that must appear in `runtime-args.stderr.txt`.
+
 ## Cases
 - `basic-run`: minimal config + `echo ok`.
 - `auto-build`: auto-builds when the image is missing.
 - `image-override`: `--gw-img={{GW_IMAGE_ALT}}` override.
 - `context-tag`: `gw_context_rules` in `.giftwrap.toml` + `--gw-use-ctx={{CTX_SHA}}`.
+- `context-cache`: verbose logs show recalculated context SHA on first run, cached on second.
 - `shares`: `extra_shares` mount verification.
 - `env-overrides`: config override via `GW_USER_OPT_SET_env_overrides` (legacy `GIFTWRAP_SET_*`).
 - `persist-env`: persisted environment round-trip across two runs.

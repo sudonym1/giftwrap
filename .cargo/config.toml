@@ -1,0 +1,3 @@
+[build]
+# Default to musl so `cargo install --path .` produces a musl binary.
+target = "x86_64-unknown-linux-musl"

@@ -1,0 +1,2 @@
+FROM docker.io/library/debian:bookworm-slim
+RUN echo external-containerfile-should-not-be-used

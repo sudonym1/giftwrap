@@ -465,6 +465,7 @@ skip_flag = false
 
     #[test]
     fn load_from_errors_without_gw_container() {
+        let _lock = lock_env();
         let temp = TempDir::new().unwrap();
         write_config_contents(temp.path(), ".giftwrap.toml", "extra_args = [\"base\"]\n");
 
@@ -481,6 +482,7 @@ skip_flag = false
 
     #[test]
     fn load_from_errors_on_prefix_conflict() {
+        let _lock = lock_env();
         let temp = TempDir::new().unwrap();
         write_config_contents(
             temp.path(),

@@ -1,6 +1,11 @@
 gw_container = "gwcontainer"
 version_by_build_context = ".gwcontext"
+gw_containerfile = '''
+FROM alpine:latest
+RUN apk add --no-cache sudo
+COPY Containerfile /containerfile
+COPY PLAN.md /plan.md
+'''
 gw_context_rules = [
-  "Containerfile",
-  "stunt_file",
+    "PLAN.md"
 ]

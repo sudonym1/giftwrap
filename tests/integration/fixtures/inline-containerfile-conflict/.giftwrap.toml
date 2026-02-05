@@ -1,0 +1,5 @@
+gw_container = "giftwrap-integration-inline-conflict:latest"
+gw_context_rules = ["/Containerfile"]
+gw_containerfile = """
+FROM docker.io/library/debian:bookworm-slim
+"""

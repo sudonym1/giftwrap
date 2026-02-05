@@ -1,0 +1,1 @@
+Error: gw_containerfile cannot be used when Containerfile is in the context

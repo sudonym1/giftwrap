@@ -1,0 +1,4 @@
+--gw-rebuild
+--
+echo
+should-not-run

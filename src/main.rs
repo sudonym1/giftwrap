@@ -181,14 +181,22 @@ fn run() -> Result<(), String> {
         rebuild_plan(cli_opts.rebuild, auto_build, image_exists, &image)
     {
         let context_files = if let Some(ctx) = context.as_ref() {
-            ctx.files.clone()
+            context::ContextFiles {
+                files: ctx.files.clone(),
+                inline_containerfile: ctx.inline_containerfile.clone(),
+            }
         } else {
             context::build_context_files_from_params(&root_dir, &params)
                 .map_err(|err| err.to_string())?
         };
         verbose.log(|| format!("image build: podman build -t {} -", rebuild_image));
         println!("Rebuilding container {rebuild_image}");
-        exec::build_image(&rebuild_image, &root_dir, &context_files)
+        exec::build_image(
+            &rebuild_image,
+            &root_dir,
+            &context_files.files,
+            context_files.inline_containerfile.as_deref(),
+        )
             .map_err(|err| err.to_string())?;
     }
 

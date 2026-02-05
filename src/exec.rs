@@ -29,8 +29,9 @@ pub fn build_image(
     image: &str,
     context_dir: &Path,
     context_files: &[String],
+    inline_containerfile: Option<&str>,
 ) -> Result<(), ExecError> {
-    podman_cli::build_image(image, context_dir, context_files)
+    podman_cli::build_image(image, context_dir, context_files, inline_containerfile)
         .map_err(|err| ExecError::new(err.to_string()))
 }
 

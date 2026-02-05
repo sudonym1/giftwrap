@@ -324,6 +324,18 @@ run_step() {
   write_cmd_file "$step_out/cmd.txt" "${env_vars[@]}" -- "${args[@]}"
   run_with_env "$step_out/stdout.txt" "$step_out/stderr.txt" "$step_out/exit-code" \
     "${env_vars[@]}" -- "${args[@]}"
+  local expected_exit="0"
+  if [[ -f "$step_dir/expect-exit-code.txt" ]]; then
+    expected_exit=$(head -n 1 "$step_dir/expect-exit-code.txt" | tr -d '\r')
+    local actual_exit
+    actual_exit=$(head -n 1 "$step_out/exit-code" | tr -d '\r')
+    if [[ -n "$expected_exit" && "$actual_exit" != "$expected_exit" ]]; then
+      echo "Expected exit-code to be $expected_exit (got $actual_exit)" >&2
+      echo "See $step_out/exit-code" >&2
+      exit 1
+    fi
+  fi
+  printf '%s\n' "$expected_exit" > "$step_out/expected-exit-code"
 }
 
 run_case() {
@@ -409,5 +421,18 @@ for case in "${CASES[@]}"; do
 done
 
 echo "Artifacts written to $ARTIFACTS_DIR"
-export ARTIFACTS_DIR
-find  "$ARTIFACTS_DIR" -name exit-code | xargs snail -m '"{$src.removeprefix($env.ARTIFACTS_DIR+"/")}: {$text.strip()}"'
+while IFS= read -r file; do
+  rel=${file#"$ARTIFACTS_DIR"/}
+  actual=$(tr -d '\r' < "$file")
+  expected_file="${file%/exit-code}/expected-exit-code"
+  if [[ -f "$expected_file" ]]; then
+    expected=$(tr -d '\r' < "$expected_file")
+  else
+    expected="0"
+  fi
+  if [[ "$actual" == "$expected" ]]; then
+    echo "$rel: passed"
+  else
+    echo "$rel: failed (expected $expected actual $actual)"
+  fi
+done < <(find "$ARTIFACTS_DIR" -name exit-code | sort)

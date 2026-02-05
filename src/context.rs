@@ -9,15 +9,23 @@ use sha1::{Digest, Sha1};
 use tar::{EntryType, Header};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextFiles {
+    pub files: Vec<String>,
+    pub inline_containerfile: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextSha {
     pub sha: String,
     pub files: Vec<String>,
+    pub inline_containerfile: Option<String>,
     pub sha_file: PathBuf,
     pub cached: bool,
 }
 
 const CONFIG_NAME: &str = ".giftwrap.toml";
 const CONTAINERFILE_NAME: &str = "Containerfile";
+const INLINE_CONTAINERFILE_KEY: &str = "gw_containerfile";
 
 #[derive(Debug)]
 pub struct ContextError {
@@ -75,39 +83,58 @@ pub fn load_from_config(
             "Error: version_by_build_context requires gw_context_rules in .giftwrap.toml",
         ));
     };
-
+    let inline_containerfile = inline_containerfile_from_params(params)?;
+    let files = build_context_file_list(root_dir, rules, inline_containerfile.as_deref())?;
+    let context_files = ContextFiles {
+        files,
+        inline_containerfile,
+    };
     let sha_file = root_dir.join(&ctx[0]);
-    let context = build_context_sha(root_dir, &sha_file, rules)?;
+    let context = build_context_sha(root_dir, &sha_file, &context_files)?;
     Ok(Some(context))
 }
 
 pub fn build_context_files_from_params(
     root_dir: &Path,
     params: &HashMap<String, Vec<String>>,
-) -> Result<Vec<String>, ContextError> {
+) -> Result<ContextFiles, ContextError> {
     let Some(rules) = params.get("gw_context_rules") else {
         return Err(ContextError::new(
             "Error: gw_context_rules must be specified in .giftwrap.toml to build the image",
         ));
     };
-    build_context_file_list(root_dir, rules)
+    let inline_containerfile = inline_containerfile_from_params(params)?;
+    let files = build_context_file_list(root_dir, rules, inline_containerfile.as_deref())?;
+    Ok(ContextFiles {
+        files,
+        inline_containerfile,
+    })
 }
 
 pub fn build_context_sha(
     root_dir: &Path,
     sha_file: &Path,
-    rules: &[String],
+    context_files: &ContextFiles,
 ) -> Result<ContextSha, ContextError> {
     let sha_file = if sha_file.is_absolute() {
         sha_file.to_path_buf()
     } else {
         root_dir.join(sha_file)
     };
-    let files = build_context_file_list(root_dir, rules)?;
+    let files = context_files.files.clone();
 
-    let dirty = is_sha_file_dirty(&sha_file, &files, root_dir)?;
+    let dirty = is_sha_file_dirty(
+        &sha_file,
+        &files,
+        root_dir,
+        context_files.inline_containerfile.as_deref(),
+    )?;
     let sha = if dirty {
-        let sha = compute_sha(root_dir, &files)?;
+        let sha = compute_sha(
+            root_dir,
+            &files,
+            context_files.inline_containerfile.as_deref(),
+        )?;
         write_sha_file(&sha_file, &sha, &files)?;
         sha
     } else {
@@ -117,6 +144,7 @@ pub fn build_context_sha(
     Ok(ContextSha {
         sha,
         files,
+        inline_containerfile: context_files.inline_containerfile.clone(),
         sha_file,
         cached: !dirty,
     })
@@ -125,11 +153,18 @@ pub fn build_context_sha(
 pub fn write_context_tar<W: Write>(
     root_dir: &Path,
     files: &[String],
+    inline_containerfile: Option<&str>,
     writer: W,
 ) -> Result<(), ContextError> {
     let mut builder = tar::Builder::new(writer);
 
     for rel in files {
+        if rel == CONTAINERFILE_NAME {
+            if let Some(contents) = inline_containerfile {
+                append_inline_file(&mut builder, rel, contents)?;
+                continue;
+            }
+        }
         let path = root_dir.join(rel);
         let meta = fs::symlink_metadata(&path).map_err(|err| {
             ContextError::new(format!(
@@ -169,6 +204,7 @@ pub fn write_context_tar<W: Write>(
 fn build_context_file_list(
     root_dir: &Path,
     rules: &[String],
+    inline_containerfile: Option<&str>,
 ) -> Result<Vec<String>, ContextError> {
     let files = collect_files(root_dir)?;
     let patterns = parse_rules(rules);
@@ -191,6 +227,15 @@ fn build_context_file_list(
     }
 
     selected.insert(CONFIG_NAME.to_string());
+    if inline_containerfile.is_some() {
+        if selected.contains(CONTAINERFILE_NAME) {
+            return Err(ContextError::new(
+                "Error: gw_containerfile cannot be used when Containerfile is in the context",
+            ));
+        }
+        selected.insert(CONTAINERFILE_NAME.to_string());
+    }
+
     let files: Vec<String> = selected.into_iter().collect();
     ensure_containerfile_present(&files)?;
 
@@ -404,6 +449,7 @@ fn is_sha_file_dirty(
     sha_file: &Path,
     file_list: &[String],
     root_dir: &Path,
+    inline_containerfile: Option<&str>,
 ) -> Result<bool, ContextError> {
     if !sha_file.exists() {
         return Ok(true);
@@ -434,6 +480,9 @@ fn is_sha_file_dirty(
         })?;
 
     for rel in file_list {
+        if inline_containerfile.is_some() && rel == CONTAINERFILE_NAME {
+            continue;
+        }
         let path = root_dir.join(rel);
         let meta = match fs::metadata(&path) {
             Ok(meta) => meta,
@@ -451,10 +500,20 @@ fn is_sha_file_dirty(
     Ok(false)
 }
 
-fn compute_sha(root_dir: &Path, file_list: &[String]) -> Result<String, ContextError> {
+fn compute_sha(
+    root_dir: &Path,
+    file_list: &[String],
+    inline_containerfile: Option<&str>,
+) -> Result<String, ContextError> {
     let mut hasher = Sha1::new();
     let mut buf = vec![0u8; 1 << 20];
     for rel in file_list {
+        if inline_containerfile.is_some() && rel == CONTAINERFILE_NAME {
+            if let Some(contents) = inline_containerfile {
+                hasher.update(contents.as_bytes());
+            }
+            continue;
+        }
         let path = root_dir.join(rel);
         if !path.is_file() {
             continue;
@@ -490,6 +549,20 @@ fn ensure_containerfile_present(files: &[String]) -> Result<(), ContextError> {
             "Error: gw_context_rules must include Containerfile",
         ))
     }
+}
+
+fn inline_containerfile_from_params(
+    params: &HashMap<String, Vec<String>>,
+) -> Result<Option<String>, ContextError> {
+    let Some(vals) = params.get(INLINE_CONTAINERFILE_KEY) else {
+        return Ok(None);
+    };
+    if vals.len() != 1 {
+        return Err(ContextError::new(
+            "Error: gw_containerfile must be a single string",
+        ));
+    }
+    Ok(Some(vals[0].clone()))
 }
 
 fn append_symlink<W: Write>(
@@ -539,6 +612,29 @@ fn append_symlink<W: Write>(
         ))
     })?;
 
+    Ok(())
+}
+
+fn append_inline_file<W: Write>(
+    builder: &mut tar::Builder<W>,
+    rel: &str,
+    contents: &str,
+) -> Result<(), ContextError> {
+    let mut header = Header::new_gnu();
+    header.set_entry_type(EntryType::Regular);
+    header.set_size(contents.as_bytes().len() as u64);
+    header
+        .set_path(rel)
+        .map_err(|err| ContextError::new(format!("Error: invalid context path {rel}: {err}")))?;
+    header.set_mode(0o644);
+    header.set_mtime(0);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_cksum();
+
+    builder
+        .append(&header, contents.as_bytes())
+        .map_err(|err| ContextError::new(format!("Error: failed to add {rel}: {err}")))?;
     Ok(())
 }
 
@@ -608,9 +704,12 @@ fn join_components(components: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_context_file_list, build_context_sha, compute_sha, load_from_config};
+    use super::{
+        build_context_file_list, build_context_sha, compute_sha, load_from_config, ContextFiles,
+    };
     use std::collections::HashMap;
     use std::fs;
+    use std::io::Read;
     use std::path::Path;
     use tempfile::tempdir;
 
@@ -643,7 +742,7 @@ mod tests {
         write_file(temp.path(), "nested/docs/extra.md", "extra\n");
         write_file(temp.path(), "notes.txt", "notes\n");
 
-        let files = build_context_file_list(temp.path(), &rules).unwrap();
+        let files = build_context_file_list(temp.path(), &rules, None).unwrap();
 
         let expected = vec![
             ".giftwrap.toml",
@@ -670,7 +769,7 @@ mod tests {
         write_file(temp.path(), "nested/keep.txt", "keep\n");
         write_file(temp.path(), "nested/secret.txt", "secret\n");
 
-        let files = build_context_file_list(temp.path(), &rules).unwrap();
+        let files = build_context_file_list(temp.path(), &rules, None).unwrap();
 
         let expected = vec![
             ".giftwrap.toml",
@@ -690,14 +789,14 @@ mod tests {
         write_file(temp.path(), "a.txt", "alpha\n");
         write_file(temp.path(), "b.txt", "beta\n");
 
-        let files = build_context_file_list(temp.path(), &rules).unwrap();
+        let files = build_context_file_list(temp.path(), &rules, None).unwrap();
 
-        let first = compute_sha(temp.path(), &files).unwrap();
-        let second = compute_sha(temp.path(), &files).unwrap();
+        let first = compute_sha(temp.path(), &files, None).unwrap();
+        let second = compute_sha(temp.path(), &files, None).unwrap();
         assert_eq!(first, second);
 
         write_file(temp.path(), "b.txt", "beta2\n");
-        let third = compute_sha(temp.path(), &files).unwrap();
+        let third = compute_sha(temp.path(), &files, None).unwrap();
         assert_ne!(first, third);
     }
 
@@ -728,10 +827,20 @@ mod tests {
         let rules = vec!["/Containerfile".to_string(), "/data.txt".to_string()];
         let sha_file = temp.path().join(".gwcontext");
 
-        let first = build_context_sha(temp.path(), &sha_file, &rules).unwrap();
+        let files = build_context_file_list(temp.path(), &rules, None).unwrap();
+        let context_files = ContextFiles {
+            files,
+            inline_containerfile: None,
+        };
+        let first = build_context_sha(temp.path(), &sha_file, &context_files).unwrap();
         assert!(!first.cached);
 
-        let second = build_context_sha(temp.path(), &sha_file, &rules).unwrap();
+        let files = build_context_file_list(temp.path(), &rules, None).unwrap();
+        let context_files = ContextFiles {
+            files,
+            inline_containerfile: None,
+        };
+        let second = build_context_sha(temp.path(), &sha_file, &context_files).unwrap();
         assert!(second.cached);
         assert_eq!(first.sha, second.sha);
     }
@@ -745,11 +854,21 @@ mod tests {
         let rules = vec!["Containerfile".to_string(), "*.txt".to_string()];
         let sha_file = temp.path().join(".gwcontext");
 
-        let first = build_context_sha(temp.path(), &sha_file, &rules).unwrap();
+        let files = build_context_file_list(temp.path(), &rules, None).unwrap();
+        let context_files = ContextFiles {
+            files,
+            inline_containerfile: None,
+        };
+        let first = build_context_sha(temp.path(), &sha_file, &context_files).unwrap();
         assert!(!first.cached);
 
         write_file(temp.path(), "b.txt", "beta\n");
-        let second = build_context_sha(temp.path(), &sha_file, &rules).unwrap();
+        let files = build_context_file_list(temp.path(), &rules, None).unwrap();
+        let context_files = ContextFiles {
+            files,
+            inline_containerfile: None,
+        };
+        let second = build_context_sha(temp.path(), &sha_file, &context_files).unwrap();
         assert!(!second.cached);
         assert_ne!(first.sha, second.sha);
     }
@@ -761,11 +880,86 @@ mod tests {
         let rules = vec!["*.txt".to_string()];
         write_file(temp.path(), "notes.txt", "notes\n");
 
-        let err = build_context_file_list(temp.path(), &rules).unwrap_err();
+        let err = build_context_file_list(temp.path(), &rules, None).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Error: gw_context_rules must include Containerfile"
         );
+    }
+
+    #[test]
+    fn build_context_file_list_accepts_inline_containerfile() {
+        let temp = tempdir().unwrap();
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
+        write_file(temp.path(), "data.txt", "data\n");
+        let rules = vec!["/data.txt".to_string()];
+
+        let files =
+            build_context_file_list(temp.path(), &rules, Some("FROM scratch\n")).unwrap();
+
+        let expected = vec![".giftwrap.toml", "Containerfile", "data.txt"];
+        assert_eq!(files, expected);
+    }
+
+    #[test]
+    fn build_context_file_list_allows_inline_when_external_not_selected() {
+        let temp = tempdir().unwrap();
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
+        write_file(temp.path(), "Containerfile", "FROM scratch\n");
+        write_file(temp.path(), "data.txt", "data\n");
+        let rules = vec!["/data.txt".to_string()];
+
+        let files =
+            build_context_file_list(temp.path(), &rules, Some("FROM inline\n")).unwrap();
+
+        let expected = vec![".giftwrap.toml", "Containerfile", "data.txt"];
+        assert_eq!(files, expected);
+    }
+
+    #[test]
+    fn build_context_file_list_rejects_inline_with_external_containerfile() {
+        let temp = tempdir().unwrap();
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
+        write_file(temp.path(), "Containerfile", "FROM scratch\n");
+        let rules = vec!["/Containerfile".to_string()];
+
+        let err = build_context_file_list(temp.path(), &rules, Some("FROM inline\n")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Error: gw_containerfile cannot be used when Containerfile is in the context"
+        );
+    }
+
+    #[test]
+    fn write_context_tar_inlines_containerfile() {
+        use std::io::Cursor;
+        use crate::context::write_context_tar;
+
+        let temp = tempdir().unwrap();
+        write_file(temp.path(), ".giftwrap.toml", "gw_container = \"test\"\n");
+        write_file(temp.path(), "data.txt", "data\n");
+        let rules = vec!["/data.txt".to_string()];
+        let inline = "FROM inline\nRUN echo hi\n";
+
+        let files = build_context_file_list(temp.path(), &rules, Some(inline)).unwrap();
+
+        let mut buf = Vec::new();
+        write_context_tar(temp.path(), &files, Some(inline), &mut buf).unwrap();
+
+        let mut archive = tar::Archive::new(Cursor::new(buf));
+        let mut saw_inline = false;
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let path = entry.path().unwrap().to_string_lossy().to_string();
+            if path == "Containerfile" {
+                let mut contents = String::new();
+                entry.read_to_string(&mut contents).unwrap();
+                assert_eq!(contents, inline);
+                saw_inline = true;
+                break;
+            }
+        }
+        assert!(saw_inline);
     }
 
     #[cfg(unix)]
@@ -786,10 +980,10 @@ mod tests {
             "data.txt".to_string(),
             "link.txt".to_string(),
         ];
-        let files = build_context_file_list(temp.path(), &rules).unwrap();
+        let files = build_context_file_list(temp.path(), &rules, None).unwrap();
 
         let mut buf = Vec::new();
-        write_context_tar(temp.path(), &files, &mut buf).unwrap();
+        write_context_tar(temp.path(), &files, None, &mut buf).unwrap();
 
         let mut archive = tar::Archive::new(Cursor::new(buf));
         let mut names = Vec::new();

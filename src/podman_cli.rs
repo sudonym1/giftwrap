@@ -30,6 +30,7 @@ pub fn build_image(
     image: &str,
     context_dir: &Path,
     context_files: &[String],
+    inline_containerfile: Option<&str>,
 ) -> Result<(), PodmanError> {
     let mut child = Command::new("podman")
         .arg("build")
@@ -41,7 +42,7 @@ pub fn build_image(
         .map_err(|err| PodmanError::new(format!("Error: failed to launch runtime build: {err}")))?;
 
     let write_result = if let Some(mut stdin) = child.stdin.take() {
-        context::write_context_tar(context_dir, context_files, &mut stdin)
+        context::write_context_tar(context_dir, context_files, inline_containerfile, &mut stdin)
             .map_err(|err| PodmanError::new(err.to_string()))
     } else {
         Err(PodmanError::new(

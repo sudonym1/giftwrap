@@ -1,0 +1,4 @@
+--gw-rebuild
+--
+cat
+/gw-inline-marker.txt

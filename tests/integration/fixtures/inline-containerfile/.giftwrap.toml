@@ -1,0 +1,6 @@
+gw_container = "giftwrap-integration-inline:latest"
+gw_context_rules = ["/marker.txt"]
+gw_containerfile = """
+FROM docker.io/library/debian:bookworm-slim
+COPY marker.txt /gw-inline-marker.txt
+"""

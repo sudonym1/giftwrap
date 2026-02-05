@@ -25,8 +25,13 @@ impl fmt::Display for ExecError {
 
 impl std::error::Error for ExecError {}
 
-pub fn build_image(image: &str, context_dir: &Path) -> Result<(), ExecError> {
-    podman_cli::build_image(image, context_dir).map_err(|err| ExecError::new(err.to_string()))
+pub fn build_image(
+    image: &str,
+    context_dir: &Path,
+    context_files: &[String],
+) -> Result<(), ExecError> {
+    podman_cli::build_image(image, context_dir, context_files)
+        .map_err(|err| ExecError::new(err.to_string()))
 }
 
 pub fn image_exists(image: &str) -> Result<bool, ExecError> {

@@ -1,7 +1,8 @@
 use std::fmt;
 use std::path::Path;
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
 
+use crate::context;
 use crate::internal::{ContainerSpec, Mount};
 
 #[derive(Debug)]
@@ -25,14 +26,40 @@ impl fmt::Display for PodmanError {
 
 impl std::error::Error for PodmanError {}
 
-pub fn build_image(image: &str, context_dir: &Path) -> Result<(), PodmanError> {
-    let status = Command::new("podman")
+pub fn build_image(
+    image: &str,
+    context_dir: &Path,
+    context_files: &[String],
+) -> Result<(), PodmanError> {
+    let mut child = Command::new("podman")
         .arg("build")
         .arg("-t")
         .arg(image)
-        .arg(context_dir)
-        .status()
+        .arg("-")
+        .stdin(Stdio::piped())
+        .spawn()
         .map_err(|err| PodmanError::new(format!("Error: failed to launch runtime build: {err}")))?;
+
+    let write_result = if let Some(mut stdin) = child.stdin.take() {
+        context::write_context_tar(context_dir, context_files, &mut stdin)
+            .map_err(|err| PodmanError::new(err.to_string()))
+    } else {
+        Err(PodmanError::new(
+            "Error: failed to open runtime build stdin",
+        ))
+    };
+
+    if let Err(err) = write_result {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(PodmanError::new(format!(
+            "Error: failed to stream build context: {err}"
+        )));
+    }
+
+    let status = child
+        .wait()
+        .map_err(|err| PodmanError::new(format!("Error: failed to wait on runtime build: {err}")))?;
 
     if status.success() {
         Ok(())

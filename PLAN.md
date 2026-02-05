@@ -22,6 +22,8 @@
     - Output: `Config`.
   - `context`
     - Git-style file selection + `gw_context_rules` in `.giftwrap.toml` + context SHA + SHA file management.
+    - Build contexts are streamed to `podman build` as a tar archive containing exactly the selected files plus `.giftwrap.toml`.
+    - `gw_context_rules` must explicitly include `Containerfile`.
     - Output: `ContextSha` + file list metadata.
   - `cli`
     - Parse `--gw-*` flags (replacement for legacy `--dr-*`) and split runtime args vs user command via `--` delimiter.
@@ -81,6 +83,7 @@
 - Preserve all `--gw-*` flags (replacement for legacy `--dr-*`):
   - print, ctx, print-image, use-ctx, img, rebuild, show-config, extra-args, help.
 - Maintain build-context SHA tagging behavior with `gw_context_rules` in `.giftwrap.toml`.
+- Build contexts are tar-streamed to `podman build` with contents limited to `gw_context_rules` + `.giftwrap.toml`, preserving symlinks.
 - Preserve shared mount semantics and optional git-dir sharing.
 - Preserve persisted environment behavior (new implementation but same semantics).
 
@@ -100,6 +103,7 @@
 - [x] Define shared data models: `Config`, `CliOptions`, `RunSpec`, `InternalSpec`, `ContainerSpec`.
 - [x] Implement `config` and `cli` modules to match legacy behavior.
 - [x] Implement `context` module to match git-style file selection + `gw_context_rules` semantics + SHA logic.
+- [x] Stream build contexts to `podman build` as a tar archive containing the selected files.
 - [x] Implement agent runtime pieces (user setup, env handling, exec).
 - [x] Collapse workspace to a single top-level `giftwrap` crate.
 - [x] Move current `giftwrap` crate contents to repo root crate.

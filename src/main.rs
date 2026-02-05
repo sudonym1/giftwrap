@@ -158,7 +158,11 @@ fn run() -> Result<(), String> {
     }
 
     let auto_build = !cli_opts.no_auto_build;
-    let image_exists = if cli_opts.rebuild || !auto_build {
+    let override_image = cli_opts.override_image.is_some();
+    let image_exists = if override_image {
+        verbose.log(|| "image check: skipped (override image specified)".to_string());
+        true
+    } else if cli_opts.rebuild || !auto_build {
         verbose.log(|| {
             format!(
                 "image check: skipped (rebuild={} auto_build={})",
@@ -171,16 +175,21 @@ fn run() -> Result<(), String> {
         exec::image_exists(&image).map_err(|err| err.to_string())?
     };
     verbose.log(|| format!("image exists: {image_exists}"));
-    if let Some(rebuild_image) = rebuild_plan(cli_opts.rebuild, auto_build, image_exists, &image) {
-        verbose.log(|| {
-            format!(
-                "image build: podman build -t {} {}",
-                rebuild_image,
-                root_dir.display()
-            )
-        });
+    if override_image {
+        verbose.log(|| "image build: skipped (override image specified)".to_string());
+    } else if let Some(rebuild_image) =
+        rebuild_plan(cli_opts.rebuild, auto_build, image_exists, &image)
+    {
+        let context_files = if let Some(ctx) = context.as_ref() {
+            ctx.files.clone()
+        } else {
+            context::build_context_files_from_params(&root_dir, &params)
+                .map_err(|err| err.to_string())?
+        };
+        verbose.log(|| format!("image build: podman build -t {} -", rebuild_image));
         println!("Rebuilding container {rebuild_image}");
-        exec::build_image(&rebuild_image, &root_dir).map_err(|err| err.to_string())?;
+        exec::build_image(&rebuild_image, &root_dir, &context_files)
+            .map_err(|err| err.to_string())?;
     }
 
     let mut env_overrides = BTreeMap::new();

@@ -1,1 +1,2 @@
 gw_container = "giftwrap-integration-rebuild:latest"
+gw_context_rules = ["/Containerfile", "/marker.txt"]

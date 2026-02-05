@@ -27,6 +27,8 @@ if ! command -v podman >/dev/null 2>&1; then
   exit 1
 fi
 
+find $ROOT_DIR -iname .gwcontext -delete
+
 GW_IMAGE=${GW_IMAGE:-docker.io/library/debian:bookworm-slim}
 GW_IMAGE_ALT=${GW_IMAGE_ALT:-docker.io/library/debian:bookworm}
 

@@ -49,7 +49,8 @@ boundaries and fixtures.
 6. Context hashing
    - `gw_context_rules` inclusion/exclusion rules (from `.giftwrap.toml`)
    - Deterministic ordering and hash stability
-   - Error conditions (missing or malformed includes)
+   - Error conditions (missing or malformed includes, missing `Containerfile`)
+   - Build context tar stream matches the selected file list and preserves symlinks
 
 7. Image/tag selection
    - Default image behavior

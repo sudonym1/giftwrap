@@ -1,4 +1,5 @@
 --gw-img={{GW_IMAGE_ALT}}
+--gw-no-auto-build
 --
 echo
 override-ok

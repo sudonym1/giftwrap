@@ -314,7 +314,8 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let mut extra_args = cli_opts.extra_args.clone();
+    let mut extra_args = vec!["--network=host".to_string()];
+    extra_args.extend(cli_opts.extra_args.clone());
     let mut config_extra_args = params.get("extra_args").cloned().unwrap_or_default();
     if !cli_opts.runtime_args.is_empty() {
         config_extra_args.extend(cli_opts.runtime_args.clone());
@@ -933,6 +934,7 @@ mod tests {
         let hostname = mkhostname(&long);
         assert_eq!(hostname, "a".repeat(63));
     }
+
 
     #[test]
     fn expand_share_resolves_env_and_literals() {

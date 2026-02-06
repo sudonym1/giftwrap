@@ -137,7 +137,7 @@ Metadata schema (`<ctx_sha>.json`):
 5. `pull_policy_used` (string, CLI-selected)
 6. `setup_script_sha256` (string)
 7. `context_manifest_sha256` (string)
-8. `compression` (`"lzo"`)
+8. `compression` (`"zstd"`)
 9. `created_unix_ms` (u64)
 10. `giftwrap_version` (string)
 11. `tool_versions` (object)
@@ -146,7 +146,7 @@ Cache validity:
 1. `.sqfs` and `.json` both exist.
 2. Metadata parses and `schema_version` supported.
 3. Metadata `ctx_sha` equals requested `ctx_sha`.
-4. Metadata `compression == "lzo"`.
+4. Metadata `compression == "zstd"`.
 5. If pull policy is `always`, metadata is ignored and rebuild occurs.
 6. If pull policy is `missing`, reuse cache if valid.
 7. If pull policy is `never`, reuse cache or fail if missing.
@@ -185,7 +185,7 @@ Pipeline steps:
 `umoci unpack --rootless --image <work>/oci:base <work>/bundle`
 11. Run setup phase (Section 10).
 12. Build squashfs:
-`mksquashfs <work>/bundle/rootfs <cache>/<ctx_sha>.sqfs.tmp -comp lzo -xattrs -noappend`
+`mksquashfs <work>/bundle/rootfs <cache>/<ctx_sha>.sqfs.tmp -comp zstd -xattrs -noappend`
 13. Write metadata json to `<cache>/<ctx_sha>.json.tmp`.
 14. Atomically rename both temp files to final artifact paths.
 15. Release lock and remove work dir.

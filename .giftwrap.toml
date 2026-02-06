@@ -1,0 +1,2 @@
+image = "docker.io/library/debian:bookworm-slim"
+setup_script = "setup.sh"

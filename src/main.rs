@@ -54,23 +54,33 @@ fn handle_print_config() -> Result<i32, GiftwrapError> {
     })?;
     let discovered = discovery::discover(&cwd)?;
     let cfg = config::load(&discovered.config_path)?;
+    let context = context_hash::compute(&discovered.build_root, &cfg)?;
+    let overlay_root = discovered.build_root.join(".giftwrap").join(&context.ctx_sha);
 
     #[derive(Serialize)]
     struct PrintConfigOutput {
         build_root: PathBuf,
         config_path: PathBuf,
+        ctx_sha: String,
         image: String,
         setup_script: PathBuf,
         resolved_setup_script: PathBuf,
+        persistent_overlay_root: PathBuf,
+        persistent_overlay_upper: PathBuf,
+        persistent_overlay_work: PathBuf,
         env: BTreeMap<String, String>,
     }
 
     let output = PrintConfigOutput {
         build_root: discovered.build_root.clone(),
         config_path: discovered.config_path,
+        ctx_sha: context.ctx_sha,
         image: cfg.image.clone(),
         setup_script: cfg.setup_script.clone(),
         resolved_setup_script: cfg.resolve_setup_script(),
+        persistent_overlay_root: overlay_root.clone(),
+        persistent_overlay_upper: overlay_root.join("upper"),
+        persistent_overlay_work: overlay_root.join("work"),
         env: cfg.env.clone(),
     };
 

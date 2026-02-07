@@ -9,6 +9,7 @@
 - `umoci`
 - `mksquashfs`
 - `squashfuse`
+- `fuse-overlayfs`
 - `fusermount3` (or `umount` fallback)
 
 ## Config
@@ -39,7 +40,7 @@ Legacy `.giftwrap.toml` is not used.
 `giftwrap run` options:
 
 - `--rebuild`
-- `--reset` (reset persistent runtime overlay state for the current context)
+- `--reset` (reset shared persistent runtime overlay state for this workspace)
 - `--print`
 - `--verbose`
 - `--cache-dir <path>`
@@ -59,5 +60,7 @@ If no command is provided, `giftwrap run` performs setup/cache preparation and e
 
 - Cache artifacts live under `~/.giftwrap/cache` by default.
 - Cache artifact names are derived from a deterministic context hash.
+- Runtime uses one persistent overlay at `<build_root>/.giftwrap/overlay`.
+- If a command is already running, a different `ctx_sha` cannot start in the same workspace.
 - Runtime binds the discovered build root to the same absolute path inside the sandbox.
 - `env` variables are applied to runtime command execution only.

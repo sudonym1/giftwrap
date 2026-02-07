@@ -13,7 +13,14 @@ pub struct ProbedTools {
 }
 
 pub fn probe_required(logger: &Logger) -> Result<ProbedTools, GiftwrapError> {
-    let required = ["bwrap", "skopeo", "umoci", "mksquashfs", "squashfuse"];
+    let required = [
+        "bwrap",
+        "skopeo",
+        "umoci",
+        "mksquashfs",
+        "squashfuse",
+        "fuse-overlayfs",
+    ];
     let mut tool_versions = BTreeMap::new();
 
     for tool in required {

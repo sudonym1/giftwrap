@@ -61,10 +61,7 @@ fn handle_print_config() -> Result<i32, GiftwrapError> {
     let discovered = discovery::discover(&cwd)?;
     let cfg = config::load(&discovered.config_path)?;
     let context = context_hash::compute(&discovered.build_root, &cfg)?;
-    let overlay_root = discovered
-        .build_root
-        .join(".giftwrap")
-        .join(&context.ctx_sha);
+    let overlay_root = discovered.build_root.join(".giftwrap").join("overlay");
 
     #[derive(Serialize)]
     struct PrintConfigOutput {
@@ -164,24 +161,35 @@ fn handle_run(args: RunArgs) -> Result<i32, GiftwrapError> {
         .unwrap_or_else(sqfs_cache::default_cache_root);
     let paths = sqfs_cache::resolve_paths(&cache_root, &context.ctx_sha);
     sqfs_cache::ensure_layout(&paths)?;
+    let shared_mount = runtime::build_shared_mount_spec(
+        &discovered.build_root,
+        &cache_root,
+        &context.ctx_sha,
+        &paths.sqfs,
+    );
 
     let run_spec = build_run_spec(
         &discovered.build_root,
-        &context.ctx_sha,
         &cwd,
-        &paths.mountpoint,
+        &shared_mount.merged_mountpoint,
         &cfg.env,
         args.command.clone(),
     );
 
     if args.print {
-        print_run_plan(&discovered.build_root, &context, &paths, &run_spec);
+        print_run_plan(
+            &discovered.build_root,
+            &context,
+            &paths,
+            &shared_mount,
+            &run_spec,
+        );
         return Ok(0);
     }
 
     let pull_policy = args.pull.as_pull_policy();
     if args.reset || args.rebuild || pull_policy == PullPolicy::Always {
-        runtime::reset_overlay(&run_spec, &logger)?;
+        runtime::reset_overlay(&shared_mount, &tools.unmount_tool, &logger)?;
     }
 
     check_userns_support()?;
@@ -224,34 +232,22 @@ fn handle_run(args: RunArgs) -> Result<i32, GiftwrapError> {
         return Ok(0);
     }
 
-    runtime::run_with_mount(
-        &paths.sqfs,
-        &paths.mountpoint,
-        &run_spec,
-        &tools.unmount_tool,
-        &logger,
-    )
+    runtime::run_with_mount(&shared_mount, &run_spec, &tools.unmount_tool, &logger)
 }
 
 fn build_run_spec(
     build_root: &Path,
-    ctx_sha: &str,
     cwd: &Path,
-    mountpoint: &Path,
+    rootfs: &Path,
     env: &BTreeMap<String, String>,
     argv: Vec<String>,
 ) -> RunSpec {
-    let overlay_root = build_root.join(".giftwrap").join(ctx_sha);
-
     RunSpec {
         host_uid: getuid().as_raw(),
         host_gid: getgid().as_raw(),
+        rootfs: rootfs.to_path_buf(),
         build_root: build_root.to_path_buf(),
         workdir: cwd.to_path_buf(),
-        mountpoint: mountpoint.to_path_buf(),
-        overlay_root: overlay_root.clone(),
-        overlay_upper: overlay_root.join("upper"),
-        overlay_work: overlay_root.join("work"),
         env: runtime::merged_env_from_host(env),
         argv,
     }
@@ -292,6 +288,7 @@ fn print_run_plan(
     build_root: &Path,
     context: &ContextHashResult,
     paths: &CachePaths,
+    shared_mount: &runtime::SharedMountSpec,
     run_spec: &RunSpec,
 ) {
     let runtime_argv = bwrap::build_argv(run_spec);
@@ -300,7 +297,19 @@ fn print_run_plan(
     println!("Cache sqfs: {}", paths.sqfs.display());
     println!("Cache meta: {}", paths.meta.display());
     println!("Cache lock: {}", paths.lock.display());
-    println!("Cache mountpoint: {}", paths.mountpoint.display());
+    println!(
+        "Shared lower mountpoint: {}",
+        shared_mount.lower_mountpoint.display()
+    );
+    println!(
+        "Shared root mountpoint: {}",
+        shared_mount.merged_mountpoint.display()
+    );
+    println!("Runtime lock: {}", shared_mount.runtime_lock.display());
+    println!(
+        "Persistent overlay root: {}",
+        shared_mount.overlay_root.display()
+    );
     println!("Setup command: /bin/sh /tmp/giftwrap-setup.sh");
     println!("Runtime bwrap argv: bwrap {}", runtime_argv.join(" "));
 }

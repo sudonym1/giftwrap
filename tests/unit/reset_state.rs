@@ -4,7 +4,7 @@ use giftwrap::log::Logger;
 use giftwrap::{runtime, sqfs_cache};
 
 #[test]
-fn reset_all_overlays_removes_all_context_directories() {
+fn reset_all_overlays_removes_single_and_legacy_overlay_directories() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let build_root = tmp.path().join("project");
     let state_root = build_root.join(".giftwrap");
@@ -12,6 +12,10 @@ fn reset_all_overlays_removes_all_context_directories() {
 
     fs::write(state_root.join("config.toml"), "image = \"alpine\"\n").expect("write config");
     fs::write(state_root.join("context"), "ctx\n").expect("write context marker");
+
+    let overlay = state_root.join("overlay");
+    fs::create_dir_all(overlay.join("upper")).expect("create single overlay upper");
+    fs::create_dir_all(overlay.join("work")).expect("create single overlay work");
 
     let ctx_a = state_root.join("a".repeat(64));
     let ctx_b = state_root.join("b".repeat(64));
@@ -25,8 +29,9 @@ fn reset_all_overlays_removes_all_context_directories() {
 
     let logger = Logger::new(false);
     let removed = runtime::reset_all_overlays(&build_root, &logger).expect("reset overlays");
-    assert_eq!(removed, 2);
+    assert_eq!(removed, 3);
 
+    assert!(!overlay.exists());
     assert!(!ctx_a.exists());
     assert!(!ctx_b.exists());
     assert!(state_root.join("config.toml").exists());

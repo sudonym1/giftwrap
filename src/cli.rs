@@ -67,6 +67,8 @@ pub struct RunArgs {
     #[arg(long)]
     pub rebuild: bool,
     #[arg(long)]
+    pub reset_overlay: bool,
+    #[arg(long)]
     pub print: bool,
     #[arg(long)]
     pub verbose: bool,

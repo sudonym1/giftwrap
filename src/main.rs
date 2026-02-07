@@ -133,6 +133,7 @@ fn handle_run(args: RunArgs, raw_args: &[String]) -> Result<i32, GiftwrapError> 
         context_hash::compute(&discovered.build_root, &cfg)?
     };
     logger.event(format!("computed ctx_sha: {}", context.ctx_sha));
+    write_context_marker(&discovered.build_root, &context.ctx_sha)?;
 
     let cache_root = args
         .cache_dir
@@ -143,6 +144,7 @@ fn handle_run(args: RunArgs, raw_args: &[String]) -> Result<i32, GiftwrapError> 
 
     let run_spec = build_run_spec(
         &discovered.build_root,
+        &context.ctx_sha,
         &cwd,
         &paths.mountpoint,
         &cfg.env,
@@ -154,9 +156,15 @@ fn handle_run(args: RunArgs, raw_args: &[String]) -> Result<i32, GiftwrapError> 
         return Ok(0);
     }
 
+    let pull_policy = args.pull.as_pull_policy();
+    let should_reset_overlay =
+        args.reset_overlay || args.rebuild || pull_policy == PullPolicy::Always;
+    if should_reset_overlay {
+        runtime::reset_overlay(&run_spec, &logger)?;
+    }
+
     check_userns_support()?;
 
-    let pull_policy = args.pull.as_pull_policy();
     let mut cache_hit = false;
 
     if !args.rebuild {
@@ -206,20 +214,57 @@ fn handle_run(args: RunArgs, raw_args: &[String]) -> Result<i32, GiftwrapError> 
 
 fn build_run_spec(
     build_root: &Path,
+    ctx_sha: &str,
     cwd: &Path,
     mountpoint: &Path,
     env: &BTreeMap<String, String>,
     argv: Vec<String>,
 ) -> RunSpec {
+    let overlay_root = build_root.join(".giftwrap").join(ctx_sha);
+
     RunSpec {
         host_uid: getuid().as_raw(),
         host_gid: getgid().as_raw(),
         build_root: build_root.to_path_buf(),
         workdir: cwd.to_path_buf(),
         mountpoint: mountpoint.to_path_buf(),
+        overlay_root: overlay_root.clone(),
+        overlay_upper: overlay_root.join("upper"),
+        overlay_work: overlay_root.join("work"),
         env: runtime::merged_env_from_host(env),
         argv,
     }
+}
+
+fn write_context_marker(build_root: &Path, ctx_sha: &str) -> Result<(), GiftwrapError> {
+    let state_root = build_root.join(".giftwrap");
+    fs::create_dir_all(&state_root).map_err(|err| {
+        GiftwrapError::runtime(format!(
+            "failed to create state directory {}: {err}",
+            state_root.display()
+        ))
+    })?;
+
+    let context_path = state_root.join("context");
+    let tmp_path = state_root.join(format!("context.tmp.{}", std::process::id()));
+    let payload = format!("{ctx_sha}\n");
+
+    fs::write(&tmp_path, payload).map_err(|err| {
+        GiftwrapError::runtime(format!(
+            "failed to write context marker {}: {err}",
+            tmp_path.display()
+        ))
+    })?;
+
+    if let Err(err) = fs::rename(&tmp_path, &context_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(GiftwrapError::runtime(format!(
+            "failed to update context marker {}: {err}",
+            context_path.display()
+        )));
+    }
+
+    Ok(())
 }
 
 fn print_run_plan(

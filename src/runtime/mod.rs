@@ -2,8 +2,10 @@ pub mod bwrap;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::ErrorKind;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 
@@ -44,6 +46,7 @@ pub fn run_with_mount(
     unmount_tool: &str,
     logger: &Logger,
 ) -> Result<i32, GiftwrapError> {
+    ensure_overlay_layout(spec)?;
     mount_sqfs(sqfs_path, mountpoint, logger)?;
 
     let run_result = run_bwrap_child(spec, logger);
@@ -57,6 +60,238 @@ pub fn run_with_mount(
             logger.event(format!("secondary unmount error: {unmount_err}"));
             Err(run_err)
         }
+    }
+}
+
+pub fn reset_overlay(spec: &RunSpec, logger: &Logger) -> Result<(), GiftwrapError> {
+    ensure_overlay_root_safe(spec)?;
+
+    match fs::symlink_metadata(&spec.overlay_root) {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                return Err(GiftwrapError::runtime(format!(
+                    "overlay root is not a directory: {}",
+                    spec.overlay_root.display()
+                )));
+            }
+
+            match fs::remove_dir_all(&spec.overlay_root) {
+                Ok(()) => {
+                    logger.event(format!(
+                        "reset persistent overlay: {}",
+                        spec.overlay_root.display()
+                    ));
+                    Ok(())
+                }
+                Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                    logger.event(format!(
+                        "remove_dir_all permission denied for {}; falling back to native force-remove",
+                        spec.overlay_root.display()
+                    ));
+                    remove_overlay_force(&spec.overlay_root)
+                }
+                Err(err) => Err(GiftwrapError::runtime(format!(
+                    "failed to remove overlay directory {}: {err}",
+                    spec.overlay_root.display()
+                ))),
+            }
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(GiftwrapError::runtime(format!(
+            "failed to inspect overlay directory {}: {err}",
+            spec.overlay_root.display()
+        ))),
+    }
+}
+
+fn remove_overlay_force(root: &Path) -> Result<(), GiftwrapError> {
+    let mut stack = vec![(root.to_path_buf(), false)];
+
+    while let Some((path, visited)) = stack.pop() {
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(GiftwrapError::runtime(format!(
+                    "failed to inspect overlay path {}: {err}",
+                    path.display()
+                )))
+            }
+        };
+
+        if metadata.is_dir() {
+            if !visited {
+                ensure_dir_access(&path)?;
+                let children = read_dir_children(&path)?;
+                stack.push((path, true));
+                for child in children {
+                    stack.push((child, false));
+                }
+                continue;
+            }
+
+            remove_dir_force(&path)?;
+            continue;
+        }
+
+        remove_file_force(&path)?;
+    }
+
+    if root.exists() {
+        return Err(GiftwrapError::runtime(format!(
+            "overlay directory still exists after force-remove: {}",
+            root.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn read_dir_children(path: &Path) -> Result<Vec<PathBuf>, GiftwrapError> {
+    let entries = fs::read_dir(path).or_else(|err| {
+        if err.kind() != ErrorKind::PermissionDenied {
+            return Err(err);
+        }
+        ensure_dir_access(path).map_err(|_| err)?;
+        fs::read_dir(path)
+    });
+
+    match entries {
+        Ok(entries) => entries
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.path())
+                    .map_err(|err| GiftwrapError::runtime(format!(
+                        "failed to inspect overlay entry in {}: {err}",
+                        path.display()
+                    )))
+            })
+            .collect(),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(GiftwrapError::runtime(format!(
+            "failed to read overlay directory {}: {err}",
+            path.display()
+        ))),
+    }
+}
+
+fn remove_file_force(path: &Path) -> Result<(), GiftwrapError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+            ensure_parent_access(path)?;
+            match fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(GiftwrapError::runtime(format!(
+                    "failed to remove overlay file {}: {err}",
+                    path.display()
+                ))),
+            }
+        }
+        Err(err) => Err(GiftwrapError::runtime(format!(
+            "failed to remove overlay file {}: {err}",
+            path.display()
+        ))),
+    }
+}
+
+fn remove_dir_force(path: &Path) -> Result<(), GiftwrapError> {
+    match fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+            ensure_parent_access(path)?;
+            ensure_dir_access(path)?;
+            match fs::remove_dir(path) {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(GiftwrapError::runtime(format!(
+                    "failed to remove overlay directory {}: {err}",
+                    path.display()
+                ))),
+            }
+        }
+        Err(err) => Err(GiftwrapError::runtime(format!(
+            "failed to remove overlay directory {}: {err}",
+            path.display()
+        ))),
+    }
+}
+
+fn ensure_parent_access(path: &Path) -> Result<(), GiftwrapError> {
+    if let Some(parent) = path.parent() {
+        ensure_dir_access(parent)?;
+    }
+    Ok(())
+}
+
+fn ensure_dir_access(path: &Path) -> Result<(), GiftwrapError> {
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        GiftwrapError::runtime(format!(
+            "failed to inspect overlay directory {}: {err}",
+            path.display()
+        ))
+    })?;
+
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+
+    let mut perms = metadata.permissions();
+    let mode = perms.mode();
+    let desired = mode | 0o700;
+    if desired != mode {
+        perms.set_mode(desired);
+        fs::set_permissions(path, perms).map_err(|err| {
+            GiftwrapError::runtime(format!(
+                "failed to adjust overlay directory permissions {}: {err}",
+                path.display()
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn ensure_overlay_layout(spec: &RunSpec) -> Result<(), GiftwrapError> {
+    ensure_overlay_root_safe(spec)?;
+
+    for dir in [&spec.overlay_upper, &spec.overlay_work] {
+        fs::create_dir_all(dir).map_err(|err| {
+            GiftwrapError::runtime(format!(
+                "failed to create overlay directory {}: {err}",
+                dir.display()
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn ensure_overlay_root_safe(spec: &RunSpec) -> Result<(), GiftwrapError> {
+    match fs::symlink_metadata(&spec.overlay_root) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(GiftwrapError::runtime(format!(
+                    "overlay root cannot be a symlink: {}",
+                    spec.overlay_root.display()
+                )));
+            }
+            if !metadata.is_dir() {
+                return Err(GiftwrapError::runtime(format!(
+                    "overlay root is not a directory: {}",
+                    spec.overlay_root.display()
+                )));
+            }
+            Ok(())
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(GiftwrapError::runtime(format!(
+            "failed to inspect overlay root {}: {err}",
+            spec.overlay_root.display()
+        ))),
     }
 }
 

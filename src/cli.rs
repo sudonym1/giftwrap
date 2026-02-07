@@ -25,6 +25,8 @@ pub enum Commands {
 
 #[derive(Debug, Args)]
 pub struct CacheArgs {
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
     #[command(subcommand)]
     pub command: CacheCommands,
 }
@@ -32,14 +34,13 @@ pub struct CacheArgs {
 #[derive(Debug, Subcommand)]
 pub enum CacheCommands {
     Gc(CacheGcArgs),
+    Reset,
 }
 
 #[derive(Debug, Args)]
 pub struct CacheGcArgs {
     #[arg(long)]
     pub print: bool,
-    #[arg(long)]
-    pub cache_dir: Option<PathBuf>,
     #[arg(long)]
     pub max_age_days: Option<u64>,
 }
@@ -65,8 +66,8 @@ impl PullPolicyArg {
 pub struct RunArgs {
     #[arg(long)]
     pub rebuild: bool,
-    #[arg(long)]
-    pub reset_overlay: bool,
+    #[arg(long, alias = "reset-overlay")]
+    pub reset: bool,
     #[arg(long)]
     pub print: bool,
     #[arg(long)]

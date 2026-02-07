@@ -44,18 +44,16 @@ fn runtime_bwrap_argv_contains_required_defaults() {
 
     assert!(argv.windows(2).any(|window| window == ["--uid", "1000"]));
     assert!(argv.windows(2).any(|window| window == ["--gid", "1000"]));
-    assert!(argv
-        .windows(5)
-        .any(|window| {
-            window
-                == [
-                    "--overlay-src",
-                    "/tmp/cache/mnt/ctx",
-                    "--overlay",
-                    "/workspace/project/.giftwrap/ctx/upper",
-                    "/workspace/project/.giftwrap/ctx/work",
-                ]
-        }));
+    assert!(argv.windows(5).any(|window| {
+        window
+            == [
+                "--overlay-src",
+                "/tmp/cache/mnt/ctx",
+                "--overlay",
+                "/workspace/project/.giftwrap/ctx/upper",
+                "/workspace/project/.giftwrap/ctx/work",
+            ]
+    }));
 
     let dash = argv
         .iter()

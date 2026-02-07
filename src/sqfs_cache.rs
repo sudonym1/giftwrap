@@ -280,6 +280,68 @@ pub fn gc(cache_root: &Path, options: &GcOptions) -> Result<GcReport, GiftwrapEr
     Ok(GcReport { removed, messages })
 }
 
+pub fn reset_all(cache_root: &Path) -> Result<usize, GiftwrapError> {
+    match fs::symlink_metadata(cache_root) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(GiftwrapError::cache(format!(
+                    "cache root cannot be a symlink: {}",
+                    cache_root.display()
+                )));
+            }
+            if !metadata.is_dir() {
+                return Err(GiftwrapError::cache(format!(
+                    "cache root is not a directory: {}",
+                    cache_root.display()
+                )));
+            }
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+        Err(err) => {
+            return Err(GiftwrapError::cache(format!(
+                "failed to inspect cache root {}: {err}",
+                cache_root.display()
+            )))
+        }
+    }
+
+    let entries = fs::read_dir(cache_root).map_err(|err| {
+        GiftwrapError::cache(format!(
+            "failed to read cache root {}: {err}",
+            cache_root.display()
+        ))
+    })?;
+
+    let mut removed = 0usize;
+
+    for entry in entries {
+        let entry = entry
+            .map_err(|err| GiftwrapError::cache(format!("failed to inspect cache entry: {err}")))?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|err| {
+            GiftwrapError::cache(format!("failed to stat {}: {err}", path.display()))
+        })?;
+
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            fs::remove_file(&path).map_err(|err| {
+                GiftwrapError::cache(format!("failed to remove file {}: {err}", path.display()))
+            })?;
+            removed += 1;
+            continue;
+        }
+
+        fs::remove_dir_all(&path).map_err(|err| {
+            GiftwrapError::cache(format!(
+                "failed to remove directory {}: {err}",
+                path.display()
+            ))
+        })?;
+        removed += 1;
+    }
+
+    Ok(removed)
+}
+
 fn collect_stale_work(
     cache_root: &Path,
     now: SystemTime,

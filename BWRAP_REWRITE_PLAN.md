@@ -34,13 +34,14 @@ Startup behavior:
 Top-level commands:
 1. `giftwrap run [options] [command ...]`
 2. `giftwrap print-config`
-3. `giftwrap cache gc`
-4. `giftwrap version`
+3. `giftwrap cache reset`
+4. `giftwrap cache gc`
+5. `giftwrap version`
 
 `run` options:
 1. `--rebuild`
 Force rebuild even if cache exists.
-2. `--reset-overlay`
+2. `--reset`
 Delete persistent runtime overlay state for this context before running.
 3. `--print`
 Print resolved build/run plan and exit without execution.
@@ -246,7 +247,7 @@ Notes:
 Steps:
 1. Ensure sqfs cache artifact exists (build if needed).
 2. Build `RunSpec`, including persistent overlay paths under `<build_root>/.giftwrap/<ctx_sha>/`.
-3. If `--reset-overlay`, `--rebuild`, or `--pull always`, clear persistent overlay state first.
+3. If `--reset`, `--rebuild`, or `--pull always`, clear the current context overlay state first.
 4. Ensure overlay layout (`upper`, `work`) exists and is safe (non-symlink root).
 5. Mount sqfs read-only:
 `squashfuse <cache>/<ctx_sha>.sqfs <cache>/mnt/<ctx_sha>`
@@ -470,7 +471,7 @@ run():
     print_plan(cfg, ctx, paths, run_spec)
     return 0
 
-  if cli.reset_overlay || cli.rebuild || pull_policy == Always:
+  if cli.reset || cli.rebuild || pull_policy == Always:
     runtime::reset_overlay(run_spec)
 
   check_userns_support()
@@ -496,7 +497,11 @@ maybe_run:
   return runtime::run_with_mount(paths.sqfs, paths.mountpoint, run_spec)
 ```
 
-## 17. Cache GC Specification
+## 17. Cache Maintenance Specification
+`giftwrap cache reset` behavior:
+1. Delete all files and directories under cache root.
+2. Do not modify build-root persistent overlays (`<build_root>/.giftwrap/<ctx_sha>/...`).
+
 `giftwrap cache gc` behavior:
 1. Delete stale work dirs older than 24h under `cache/work`.
 2. Delete stale mount dirs with no active FUSE mount.
@@ -569,7 +574,7 @@ Phase 4:
 
 Phase 5:
 1. Wire main orchestration and `--print`.
-2. Add cache gc command.
+2. Add cache reset/gc commands.
 3. Complete tests and manual fixtures.
 
 Definition of done:

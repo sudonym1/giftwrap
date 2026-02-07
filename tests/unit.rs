@@ -10,6 +10,8 @@ mod discovery;
 mod locking;
 #[path = "unit/metadata_validity.rs"]
 mod metadata_validity;
+#[path = "unit/reset_state.rs"]
+mod reset_state;
 #[path = "unit/runtime_argv.rs"]
 mod runtime_argv;
 #[path = "unit/tool_command_composition.rs"]

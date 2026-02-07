@@ -32,12 +32,14 @@ Legacy `.giftwrap.toml` is not used.
 
 - `giftwrap run [options] [command ...]`
 - `giftwrap print-config`
-- `giftwrap cache gc [--print] [--max-age-days <n>]`
+- `giftwrap cache [--cache-dir <path>] reset`
+- `giftwrap cache [--cache-dir <path>] gc [--print] [--max-age-days <n>]`
 - `giftwrap version`
 
 `giftwrap run` options:
 
 - `--rebuild`
+- `--reset` (reset persistent runtime overlay state for the current context)
 - `--print`
 - `--verbose`
 - `--cache-dir <path>`

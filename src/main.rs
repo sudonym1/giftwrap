@@ -38,9 +38,15 @@ fn dispatch(cli: giftwrap::cli::Cli) -> Result<i32, GiftwrapError> {
     match cli.command {
         Commands::Run(run_args) => handle_run(run_args),
         Commands::PrintConfig => handle_print_config(),
-        Commands::Cache(cache_args) => match cache_args.command {
-            CacheCommands::Gc(gc_args) => handle_cache_gc(gc_args),
-        },
+        Commands::Cache(cache_args) => {
+            let cache_root = cache_args
+                .cache_dir
+                .unwrap_or_else(sqfs_cache::default_cache_root);
+            match cache_args.command {
+                CacheCommands::Gc(gc_args) => handle_cache_gc(&cache_root, gc_args),
+                CacheCommands::Reset => handle_cache_reset(&cache_root),
+            }
+        }
         Commands::Version => {
             println!("{}", giftwrap::VERSION);
             Ok(0)
@@ -55,7 +61,10 @@ fn handle_print_config() -> Result<i32, GiftwrapError> {
     let discovered = discovery::discover(&cwd)?;
     let cfg = config::load(&discovered.config_path)?;
     let context = context_hash::compute(&discovered.build_root, &cfg)?;
-    let overlay_root = discovered.build_root.join(".giftwrap").join(&context.ctx_sha);
+    let overlay_root = discovered
+        .build_root
+        .join(".giftwrap")
+        .join(&context.ctx_sha);
 
     #[derive(Serialize)]
     struct PrintConfigOutput {
@@ -90,12 +99,18 @@ fn handle_print_config() -> Result<i32, GiftwrapError> {
     Ok(0)
 }
 
-fn handle_cache_gc(args: giftwrap::cli::CacheGcArgs) -> Result<i32, GiftwrapError> {
-    let cache_root = args
-        .cache_dir
-        .unwrap_or_else(sqfs_cache::default_cache_root);
+fn handle_cache_reset(cache_root: &Path) -> Result<i32, GiftwrapError> {
+    let removed = sqfs_cache::reset_all(cache_root)?;
+    println!("Removed {removed} path(s)");
+    Ok(0)
+}
+
+fn handle_cache_gc(
+    cache_root: &Path,
+    args: giftwrap::cli::CacheGcArgs,
+) -> Result<i32, GiftwrapError> {
     let report = sqfs_cache::gc(
-        &cache_root,
+        cache_root,
         &GcOptions {
             dry_run: args.print,
             max_age_days: args.max_age_days,
@@ -165,9 +180,7 @@ fn handle_run(args: RunArgs) -> Result<i32, GiftwrapError> {
     }
 
     let pull_policy = args.pull.as_pull_policy();
-    let should_reset_overlay =
-        args.reset_overlay || args.rebuild || pull_policy == PullPolicy::Always;
-    if should_reset_overlay {
+    if args.reset || args.rebuild || pull_policy == PullPolicy::Always {
         runtime::reset_overlay(&run_spec, &logger)?;
     }
 

@@ -88,19 +88,30 @@ pub fn run_setup(
     let args = setup_bwrap_args(rootfs);
     logger.command("bwrap", &args);
 
-    let status = Command::new("bwrap")
+    let mut command = Command::new("bwrap");
+    command
         .args(&args)
         .env("GW_BUILD_ROOT", build_root)
         .env("GW_CTX_SHA", ctx_sha)
         .env("GW_IMAGE_REF", &cfg.image)
         .env("GW_CACHE_DIR", cache_dir)
-        .status()
-        .map_err(|err| {
-            GiftwrapError::build_hint(
-                format!("failed to execute setup script in bwrap: {err}"),
-                "ensure bwrap is installed and unprivileged user namespaces are enabled",
-            )
-        })?;
+        // Avoid leaking host HOME into root sandboxed setup processes.
+        .env("HOME", "/root")
+        .env("USER", "root")
+        .env("LOGNAME", "root")
+        // Rootless user namespaces cannot chown arbitrary IDs during extraction.
+        .env("TAR_OPTIONS", "--no-same-owner --no-same-permissions");
+
+    if let Ok(term) = std::env::var("TERM") {
+        command.env("TERM", term);
+    }
+
+    let status = command.status().map_err(|err| {
+        GiftwrapError::build_hint(
+            format!("failed to execute setup script in bwrap: {err}"),
+            "ensure bwrap is installed and unprivileged user namespaces are enabled",
+        )
+    })?;
 
     if status.success() {
         return Ok(());
@@ -155,6 +166,19 @@ pub fn setup_bwrap_args(rootfs: &Path) -> Vec<String> {
         "/dev".to_string(),
         "--chdir".to_string(),
         "/".to_string(),
+        "--dir".to_string(),
+        "/run/systemd".to_string(),
+        "--dir".to_string(),
+        "/run/systemd/resolve".to_string(),
+        "--ro-bind".to_string(),
+        "/etc/resolv.conf".to_string(),
+        "/etc/resolv.conf".to_string(),
+        "--ro-bind".to_string(),
+        "/etc/resolv.conf".to_string(),
+        "/run/systemd/resolve/stub-resolv.conf".to_string(),
+        "--ro-bind".to_string(),
+        "/etc/resolv.conf".to_string(),
+        "/run/systemd/resolve/resolv.conf".to_string(),
         "/bin/sh".to_string(),
         SETUP_SCRIPT_DEST.to_string(),
     ]

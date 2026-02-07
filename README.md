@@ -1,6 +1,6 @@
 # giftwrap v2
 
-`giftwrap` v2 is a Linux-only CLI that runs commands in a reproducible sandbox defined by `.giftwrap.toml`.
+`giftwrap` v2 is a Linux-only CLI that runs commands in a reproducible sandbox defined by `.giftwrap/config.toml`.
 
 ## Required tools
 
@@ -13,17 +13,20 @@
 
 ## Config
 
-Create `.giftwrap.toml` at your project root:
+Create `.giftwrap/config.toml` at your project root:
 
 ```toml
 image = "docker.io/library/debian:bookworm-slim"
-setup_script = "giftwrap/setup.sh"
+setup_script = "setup.sh"
 
 [env]
 PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/custom/bin"
 ```
 
 Schema is strict: only `image`, `setup_script`, and `env` are allowed.
+
+`setup_script` is resolved relative to the directory containing `.giftwrap/config.toml` (or can be absolute).
+Legacy `.giftwrap.toml` is not used.
 
 ## Commands
 

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::discovery::CONFIG_REL_PATH;
 use crate::errors::GiftwrapError;
 
 #[derive(Debug, Clone, Serialize)]
@@ -11,14 +12,16 @@ pub struct Config {
     pub image: String,
     pub setup_script: PathBuf,
     pub env: BTreeMap<String, String>,
+    #[serde(skip_serializing)]
+    config_dir: PathBuf,
 }
 
 impl Config {
-    pub fn resolve_setup_script(&self, build_root: &Path) -> PathBuf {
+    pub fn resolve_setup_script(&self) -> PathBuf {
         if self.setup_script.is_absolute() {
             self.setup_script.clone()
         } else {
-            build_root.join(&self.setup_script)
+            self.config_dir.join(&self.setup_script)
         }
     }
 }
@@ -27,7 +30,7 @@ pub fn load(path: &Path) -> Result<Config, GiftwrapError> {
     let text = fs::read_to_string(path).map_err(|err| {
         GiftwrapError::config_hint(
             format!("failed to read config {}: {err}", path.display()),
-            "ensure .giftwrap.toml exists and is readable",
+            format!("ensure {CONFIG_REL_PATH} exists and is readable"),
         )
     })?;
 
@@ -68,24 +71,25 @@ pub fn load(path: &Path) -> Result<Config, GiftwrapError> {
 
     let env = parse_env(table.get("env"))?;
 
-    let config = Config {
-        image,
-        setup_script: PathBuf::from(setup_script),
-        env,
-    };
-
-    let build_root = path.parent().ok_or_else(|| {
+    let config_dir = path.parent().ok_or_else(|| {
         GiftwrapError::config(format!(
-            "could not resolve build root from {}",
+            "could not resolve config directory from {}",
             path.display()
         ))
     })?;
 
-    let setup_path = config.resolve_setup_script(build_root);
+    let config = Config {
+        image,
+        setup_script: PathBuf::from(setup_script),
+        env,
+        config_dir: config_dir.to_path_buf(),
+    };
+
+    let setup_path = config.resolve_setup_script();
     if !setup_path.exists() {
         return Err(GiftwrapError::config_hint(
             format!("setup_script does not exist: {}", setup_path.display()),
-            "set setup_script to a valid relative or absolute path",
+            "set setup_script to a valid path relative to .giftwrap/config.toml or absolute path",
         ));
     }
 

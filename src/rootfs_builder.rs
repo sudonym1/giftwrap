@@ -50,7 +50,7 @@ pub fn run_setup(
     cache_dir: &Path,
     logger: &Logger,
 ) -> Result<(), GiftwrapError> {
-    let setup_source = cfg.resolve_setup_script(build_root);
+    let setup_source = cfg.resolve_setup_script();
     let setup_host_target = rootfs.join("tmp/giftwrap-setup.sh");
 
     if let Some(parent) = setup_host_target.parent() {

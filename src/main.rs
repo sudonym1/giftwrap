@@ -70,7 +70,7 @@ fn handle_print_config() -> Result<i32, GiftwrapError> {
         config_path: discovered.config_path,
         image: cfg.image.clone(),
         setup_script: cfg.setup_script.clone(),
-        resolved_setup_script: cfg.resolve_setup_script(&discovered.build_root),
+        resolved_setup_script: cfg.resolve_setup_script(),
         env: cfg.env.clone(),
     };
 

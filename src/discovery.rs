@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::GiftwrapError;
 
-pub const CONFIG_FILENAME: &str = ".giftwrap.toml";
+pub const CONFIG_DIRNAME: &str = ".giftwrap";
+pub const CONFIG_FILENAME: &str = "config.toml";
+pub const CONFIG_REL_PATH: &str = ".giftwrap/config.toml";
 
 #[derive(Debug, Clone)]
 pub struct DiscoveredConfig {
@@ -19,7 +21,7 @@ pub fn discover(start: &Path) -> Result<DiscoveredConfig, GiftwrapError> {
     })?;
 
     loop {
-        let candidate = current.join(CONFIG_FILENAME);
+        let candidate = current.join(CONFIG_DIRNAME).join(CONFIG_FILENAME);
         if candidate.is_file() {
             return Ok(DiscoveredConfig {
                 build_root: current,
@@ -29,7 +31,7 @@ pub fn discover(start: &Path) -> Result<DiscoveredConfig, GiftwrapError> {
 
         if !current.pop() {
             return Err(GiftwrapError::config(format!(
-                "could not find {CONFIG_FILENAME} in current directory or any parent"
+                "could not find {CONFIG_REL_PATH} in current directory or any parent"
             )));
         }
     }

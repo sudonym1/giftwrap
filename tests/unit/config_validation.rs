@@ -5,10 +5,13 @@ use giftwrap::config;
 #[test]
 fn loads_valid_config() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let setup = tmp.path().join("setup.sh");
+    let config_dir = tmp.path().join(".giftwrap");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
+    let setup = config_dir.join("setup.sh");
     fs::write(&setup, "#!/bin/sh\nexit 0\n").expect("write setup");
 
-    let config_path = tmp.path().join(".giftwrap.toml");
+    let config_path = config_dir.join("config.toml");
     fs::write(
         &config_path,
         "image = \"docker.io/library/debian:bookworm-slim\"\nsetup_script = \"setup.sh\"\n",
@@ -24,10 +27,13 @@ fn loads_valid_config() {
 #[test]
 fn loads_valid_config_with_env() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let setup = tmp.path().join("setup.sh");
+    let config_dir = tmp.path().join(".giftwrap");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
+    let setup = config_dir.join("setup.sh");
     fs::write(&setup, "#!/bin/sh\nexit 0\n").expect("write setup");
 
-    let config_path = tmp.path().join(".giftwrap.toml");
+    let config_path = config_dir.join("config.toml");
     fs::write(
         &config_path,
         "image = \"docker.io/library/debian:bookworm-slim\"\nsetup_script = \"setup.sh\"\n[env]\nPATH = \"/usr/local/bin:/usr/bin\"\nDEBIAN_FRONTEND = \"noninteractive\"\n",
@@ -48,10 +54,13 @@ fn loads_valid_config_with_env() {
 #[test]
 fn rejects_unknown_keys() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let setup = tmp.path().join("setup.sh");
+    let config_dir = tmp.path().join(".giftwrap");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
+    let setup = config_dir.join("setup.sh");
     fs::write(&setup, "#!/bin/sh\nexit 0\n").expect("write setup");
 
-    let config_path = tmp.path().join(".giftwrap.toml");
+    let config_path = config_dir.join("config.toml");
     fs::write(
         &config_path,
         "image = \"alpine:3\"\nsetup_script = \"setup.sh\"\nworkdir = \"/tmp\"\n",
@@ -65,8 +74,10 @@ fn rejects_unknown_keys() {
 #[test]
 fn rejects_missing_setup_script_path() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join(".giftwrap");
+    fs::create_dir_all(&config_dir).expect("create config dir");
 
-    let config_path = tmp.path().join(".giftwrap.toml");
+    let config_path = config_dir.join("config.toml");
     fs::write(
         &config_path,
         "image = \"alpine:3\"\nsetup_script = \"missing.sh\"\n",
@@ -80,10 +91,13 @@ fn rejects_missing_setup_script_path() {
 #[test]
 fn rejects_non_table_env() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let setup = tmp.path().join("setup.sh");
+    let config_dir = tmp.path().join(".giftwrap");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
+    let setup = config_dir.join("setup.sh");
     fs::write(&setup, "#!/bin/sh\nexit 0\n").expect("write setup");
 
-    let config_path = tmp.path().join(".giftwrap.toml");
+    let config_path = config_dir.join("config.toml");
     fs::write(
         &config_path,
         "image = \"alpine:3\"\nsetup_script = \"setup.sh\"\nenv = \"not-a-table\"\n",
@@ -97,10 +111,13 @@ fn rejects_non_table_env() {
 #[test]
 fn rejects_invalid_env_entries() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let setup = tmp.path().join("setup.sh");
+    let config_dir = tmp.path().join(".giftwrap");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
+    let setup = config_dir.join("setup.sh");
     fs::write(&setup, "#!/bin/sh\nexit 0\n").expect("write setup");
 
-    let config_path = tmp.path().join(".giftwrap.toml");
+    let config_path = config_dir.join("config.toml");
     fs::write(
         &config_path,
         "image = \"alpine:3\"\nsetup_script = \"setup.sh\"\n[env]\nPATH = 123\n",

@@ -26,7 +26,7 @@ pub struct ContextHashResult {
 }
 
 pub fn compute(build_root: &Path, cfg: &Config) -> Result<ContextHashResult, GiftwrapError> {
-    let setup_script_path = cfg.resolve_setup_script(build_root);
+    let setup_script_path = cfg.resolve_setup_script();
     let mut entries_by_path = BTreeMap::new();
 
     let setup_entry = manifest_entry_for_path(build_root, &setup_script_path)?;

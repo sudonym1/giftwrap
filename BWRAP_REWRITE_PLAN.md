@@ -1,11 +1,11 @@
 # giftwrap v2 Reimplementation Blueprint
 
 ## 1. Product Definition
-`giftwrap` v2 is a Linux-only CLI that runs commands in a fast, reproducible environment described by `.giftwrap.toml`.
+`giftwrap` v2 is a Linux-only CLI that runs commands in a fast, reproducible environment described by `.giftwrap/config.toml`.
 The environment is built from an OCI base image, mutated by a setup script, compressed to squashfs, cached, then executed with `bwrap`.
 
 Primary goals:
-1. Run commands inside an environment defined by `.giftwrap.toml`.
+1. Run commands inside an environment defined by `.giftwrap/config.toml`.
 2. Share the project root into the sandbox at the same absolute path.
 3. Run commands as host UID/GID.
 4. Optimize cold-start and repeat-run latency.
@@ -63,12 +63,12 @@ Exit codes:
 4. `3` build pipeline failure (pull/unpack/setup/squash).
 5. `4` cache lock timeout or corruption.
 
-## 4. `.giftwrap.toml` Schema
+## 4. `.giftwrap/config.toml` Schema
 Required keys:
 1. `image` (string)
 OCI image reference (tag or digest).
 2. `setup_script` (string)
-Path relative to build root or absolute path.
+Path relative to the config file directory (`.giftwrap/`) or absolute path.
 
 Optional keys:
 1. `env` (table of string key/value pairs)
@@ -86,7 +86,7 @@ Validation rules:
 Example:
 ```toml
 image = "docker.io/library/debian:bookworm-slim"
-setup_script = "giftwrap/setup.sh"
+setup_script = "setup.sh"
 
 [env]
 PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -95,12 +95,13 @@ PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ## 5. Build Root and Discovery
 Discovery:
 1. Start from current working directory.
-2. Search upward for `.giftwrap.toml`.
+2. Search upward for `.giftwrap/config.toml`.
 3. First match is the build root.
-4. If not found, error with exit code `2`.
+4. Do not fall back to legacy `.giftwrap.toml`.
+5. If not found, error with exit code `2`.
 
 Path handling:
-1. All relative config paths are resolved against build root.
+1. Relative config paths (for example `setup_script`) are resolved against the directory containing `.giftwrap/config.toml`.
 2. Root sharing bind mount is `build_root -> build_root`.
 3. Default runtime working directory is original host cwd.
 
@@ -215,7 +216,7 @@ Goal:
 Allow deterministic rootfs mutation before squashfs creation.
 
 Execution contract:
-1. Script path resolved at host before execution.
+1. Script path resolved at host from `.giftwrap/config.toml` directory before execution.
 2. Script content copied into bundle at `/tmp/giftwrap-setup.sh`.
 3. Script executed inside bwrap with bundle rootfs as `/`.
 4. Setup runs as uid `0` inside user namespace where available.
@@ -276,7 +277,7 @@ Environment strategy:
 1. Start with `--clearenv`.
 2. Set minimal defaults:
 `HOME`, `USER`, `LOGNAME`, `PATH`, `TERM` (if present on host).
-3. Apply `.giftwrap.toml` `[env]` overrides on top of host defaults.
+3. Apply `.giftwrap/config.toml` `[env]` overrides on top of host defaults.
 
 Command execution:
 1. Runtime argv is taken from `[command ...]` CLI positionals (`--` delimiter optional).
@@ -581,6 +582,6 @@ Definition of done:
 This rewrite is intentionally breaking.
 Carry a short migration doc:
 1. legacy flags removed (including `--setup-only`)
-2. new `.giftwrap.toml` schema
+2. new `.giftwrap/config.toml` schema
 3. setup script model replacing Containerfile semantics
 4. new cache and runtime behavior (including persistent per-context runtime overlays)

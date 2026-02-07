@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::config::Config;
-use crate::discovery::CONFIG_FILENAME;
 use crate::errors::GiftwrapError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,19 +26,8 @@ pub struct ContextHashResult {
 }
 
 pub fn compute(build_root: &Path, cfg: &Config) -> Result<ContextHashResult, GiftwrapError> {
-    let config_path = build_root.join(CONFIG_FILENAME);
-    let config_bytes = fs::read(&config_path).map_err(|err| {
-        GiftwrapError::config(format!(
-            "failed to read config for hashing {}: {err}",
-            config_path.display()
-        ))
-    })?;
-
     let setup_script_path = cfg.resolve_setup_script(build_root);
     let mut entries_by_path = BTreeMap::new();
-
-    let config_entry = manifest_entry_for_path(build_root, &config_path)?;
-    entries_by_path.insert(config_entry.relative_path.clone(), config_entry);
 
     let setup_entry = manifest_entry_for_path(build_root, &setup_script_path)?;
     let setup_script_sha256 = setup_entry.file_sha256.clone();
@@ -51,8 +39,6 @@ pub fn compute(build_root: &Path, cfg: &Config) -> Result<ContextHashResult, Gif
 
     let mut ctx_hasher = Sha256::new();
     ctx_hasher.update(b"giftwrap-v2\0");
-    ctx_hasher.update(&config_bytes);
-    ctx_hasher.update(b"\0");
     ctx_hasher.update(cfg.image.as_bytes());
     ctx_hasher.update(b"\0");
     ctx_hasher.update(setup_script_sha256.as_bytes());
@@ -141,15 +127,10 @@ fn hash_bytes(bytes: &[u8]) -> String {
 }
 
 fn to_manifest_path(build_root: &Path, path: &Path) -> String {
-    if path == build_root.join(CONFIG_FILENAME) {
-        return CONFIG_FILENAME.to_string();
-    }
-
     if let Ok(relative) = path.strip_prefix(build_root) {
         return pathbuf_to_manifest_string(relative);
     }
-
-    pathbuf_to_manifest_string(&PathBuf::from(path))
+    pathbuf_to_manifest_string(path)
 }
 
 fn pathbuf_to_manifest_string(path: &Path) -> String {

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,6 +10,7 @@ use crate::errors::GiftwrapError;
 pub struct Config {
     pub image: String,
     pub setup_script: PathBuf,
+    pub env: BTreeMap<String, String>,
 }
 
 impl Config {
@@ -37,7 +39,7 @@ pub fn load(path: &Path) -> Result<Config, GiftwrapError> {
         .ok_or_else(|| GiftwrapError::config("config root must be a TOML table"))?;
 
     for key in table.keys() {
-        if key != "image" && key != "setup_script" {
+        if key != "image" && key != "setup_script" && key != "env" {
             return Err(GiftwrapError::config(format!("invalid config key: {key}")));
         }
     }
@@ -64,9 +66,12 @@ pub fn load(path: &Path) -> Result<Config, GiftwrapError> {
         return Err(GiftwrapError::config("setup_script must be non-empty"));
     }
 
+    let env = parse_env(table.get("env"))?;
+
     let config = Config {
         image,
         setup_script: PathBuf::from(setup_script),
+        env,
     };
 
     let build_root = path.parent().ok_or_else(|| {
@@ -85,4 +90,49 @@ pub fn load(path: &Path) -> Result<Config, GiftwrapError> {
     }
 
     Ok(config)
+}
+
+fn parse_env(value: Option<&toml::Value>) -> Result<BTreeMap<String, String>, GiftwrapError> {
+    let mut env = BTreeMap::new();
+
+    let Some(value) = value else {
+        return Ok(env);
+    };
+
+    let env_table = value.as_table().ok_or_else(|| {
+        GiftwrapError::config("env must be a TOML table of string key/value pairs")
+    })?;
+
+    for (key, raw_value) in env_table {
+        if !is_valid_env_key(key) {
+            return Err(GiftwrapError::config(format!(
+                "env key must match [A-Za-z_][A-Za-z0-9_]*: {key}"
+            )));
+        }
+        if key.starts_with("GW_") {
+            return Err(GiftwrapError::config(format!(
+                "env key is reserved for giftwrap: {key}"
+            )));
+        }
+
+        let value = raw_value.as_str().ok_or_else(|| {
+            GiftwrapError::config(format!("env value for {key} must be a string"))
+        })?;
+        env.insert(key.clone(), value.to_string());
+    }
+
+    Ok(env)
+}
+
+fn is_valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+
+    if first != '_' && !first.is_ascii_alphabetic() {
+        return false;
+    }
+
+    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }

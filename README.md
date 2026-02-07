@@ -18,9 +18,12 @@ Create `.giftwrap.toml` at your project root:
 ```toml
 image = "docker.io/library/debian:bookworm-slim"
 setup_script = "giftwrap/setup.sh"
+
+[env]
+PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/custom/bin"
 ```
 
-Schema is strict: only `image` and `setup_script` are allowed.
+Schema is strict: only `image`, `setup_script`, and `env` are allowed.
 
 ## Commands
 
@@ -51,3 +54,4 @@ Schema is strict: only `image` and `setup_script` are allowed.
 - Cache artifacts live under `~/.giftwrap/cache` by default.
 - Cache artifact names are derived from a deterministic context hash.
 - Runtime binds the discovered build root to the same absolute path inside the sandbox.
+- `env` variables are applied to runtime command execution only.

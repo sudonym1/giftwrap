@@ -44,3 +44,30 @@ fn context_hash_changes_when_setup_changes() {
 
     assert_ne!(before.ctx_sha, after.ctx_sha);
 }
+
+#[test]
+fn context_hash_does_not_change_when_env_changes() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+
+    fs::write(root.join("setup.sh"), "#!/bin/sh\necho one\n").expect("write setup");
+    fs::write(
+        root.join(".giftwrap.toml"),
+        "image = \"docker.io/library/alpine:3\"\nsetup_script = \"setup.sh\"\n[env]\nPATH = \"/usr/bin\"\n",
+    )
+    .expect("write config");
+
+    let cfg = config::load(&root.join(".giftwrap.toml")).expect("load config");
+    let before = context_hash::compute(root, &cfg).expect("hash before");
+
+    fs::write(
+        root.join(".giftwrap.toml"),
+        "image = \"docker.io/library/alpine:3\"\nsetup_script = \"setup.sh\"\n[env]\nPATH = \"/usr/local/bin:/usr/bin\"\n",
+    )
+    .expect("update config");
+
+    let cfg = config::load(&root.join(".giftwrap.toml")).expect("reload config");
+    let after = context_hash::compute(root, &cfg).expect("hash after");
+
+    assert_eq!(before.ctx_sha, after.ctx_sha);
+}

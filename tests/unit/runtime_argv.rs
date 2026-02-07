@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use giftwrap::runtime;
 use giftwrap::runtime::bwrap::{self, RunSpec};
 
 #[test]
@@ -49,4 +50,21 @@ fn runtime_bwrap_argv_contains_required_defaults() {
         .position(|item| item == "--")
         .expect("separator");
     assert_eq!(&argv[dash + 1..], &["bash", "-lc", "echo hi"]);
+}
+
+#[test]
+fn runtime_env_merges_config_overrides() {
+    let mut overrides = BTreeMap::new();
+    overrides.insert("PATH".to_string(), "/custom/bin:/usr/bin".to_string());
+    overrides.insert("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string());
+
+    let merged = runtime::merged_env_from_host(&overrides);
+    assert_eq!(
+        merged.get("PATH"),
+        Some(&"/custom/bin:/usr/bin".to_string())
+    );
+    assert_eq!(
+        merged.get("DEBIAN_FRONTEND"),
+        Some(&"noninteractive".to_string())
+    );
 }

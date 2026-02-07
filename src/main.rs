@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -61,6 +62,7 @@ fn handle_print_config() -> Result<i32, GiftwrapError> {
         image: String,
         setup_script: PathBuf,
         resolved_setup_script: PathBuf,
+        env: BTreeMap<String, String>,
     }
 
     let output = PrintConfigOutput {
@@ -69,6 +71,7 @@ fn handle_print_config() -> Result<i32, GiftwrapError> {
         image: cfg.image.clone(),
         setup_script: cfg.setup_script.clone(),
         resolved_setup_script: cfg.resolve_setup_script(&discovered.build_root),
+        env: cfg.env.clone(),
     };
 
     let json = serde_json::to_string_pretty(&output)
@@ -142,6 +145,7 @@ fn handle_run(args: RunArgs, raw_args: &[String]) -> Result<i32, GiftwrapError> 
         &discovered.build_root,
         &cwd,
         &paths.mountpoint,
+        &cfg.env,
         args.command.clone(),
     );
 
@@ -200,14 +204,20 @@ fn handle_run(args: RunArgs, raw_args: &[String]) -> Result<i32, GiftwrapError> 
     )
 }
 
-fn build_run_spec(build_root: &Path, cwd: &Path, mountpoint: &Path, argv: Vec<String>) -> RunSpec {
+fn build_run_spec(
+    build_root: &Path,
+    cwd: &Path,
+    mountpoint: &Path,
+    env: &BTreeMap<String, String>,
+    argv: Vec<String>,
+) -> RunSpec {
     RunSpec {
         host_uid: getuid().as_raw(),
         host_gid: getgid().as_raw(),
         build_root: build_root.to_path_buf(),
         workdir: cwd.to_path_buf(),
         mountpoint: mountpoint.to_path_buf(),
-        env: runtime::minimal_env_from_host(),
+        env: runtime::merged_env_from_host(env),
         argv,
     }
 }

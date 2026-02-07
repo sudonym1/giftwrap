@@ -29,6 +29,14 @@ pub fn minimal_env_from_host() -> BTreeMap<String, String> {
     env
 }
 
+pub fn merged_env_from_host(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut env = minimal_env_from_host();
+    for (key, value) in overrides {
+        env.insert(key.clone(), value.clone());
+    }
+    env
+}
+
 pub fn run_with_mount(
     sqfs_path: &Path,
     mountpoint: &Path,

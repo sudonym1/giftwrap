@@ -27,7 +27,7 @@ Schema is strict: only `image`, `setup_script`, and `env` are allowed.
 
 ## Commands
 
-- `giftwrap run [options] -- <command ...>`
+- `giftwrap run [options] [command ...]`
 - `giftwrap print-config`
 - `giftwrap cache gc [--print] [--max-age-days <n>]`
 - `giftwrap version`
@@ -39,7 +39,8 @@ Schema is strict: only `image`, `setup_script`, and `env` are allowed.
 - `--verbose`
 - `--cache-dir <path>`
 - `--pull <missing|always|never>`
-- `--setup-only`
+
+If no command is provided, `giftwrap run` performs setup/cache preparation and exits successfully.
 
 ## Exit codes
 

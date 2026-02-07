@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use nix::unistd::{getgid, getuid};
 use serde::Serialize;
 
-use giftwrap::cli::{self, CacheCommands, Commands, ParsedCli, RunArgs};
+use giftwrap::cli::{self, CacheCommands, Commands, RunArgs};
 use giftwrap::config;
 use giftwrap::context_hash::{self, ContextHashResult};
 use giftwrap::discovery;
@@ -20,9 +20,9 @@ use giftwrap::sqfs_cache::{self, CacheMetadata, CachePaths, GcOptions, PullPolic
 use giftwrap::tooling::{self, ProbedTools};
 
 fn main() {
-    let parsed = cli::parse();
+    let cli = cli::parse();
 
-    match dispatch(parsed) {
+    match dispatch(cli) {
         Ok(code) => std::process::exit(code),
         Err(err) => {
             eprintln!("Error: {err}");
@@ -34,9 +34,9 @@ fn main() {
     }
 }
 
-fn dispatch(parsed: ParsedCli) -> Result<i32, GiftwrapError> {
-    match parsed.cli.command {
-        Commands::Run(run_args) => handle_run(run_args, &parsed.raw_args),
+fn dispatch(cli: giftwrap::cli::Cli) -> Result<i32, GiftwrapError> {
+    match cli.command {
+        Commands::Run(run_args) => handle_run(run_args),
         Commands::PrintConfig => handle_print_config(),
         Commands::Cache(cache_args) => match cache_args.command {
             CacheCommands::Gc(gc_args) => handle_cache_gc(gc_args),
@@ -109,9 +109,7 @@ fn handle_cache_gc(args: giftwrap::cli::CacheGcArgs) -> Result<i32, GiftwrapErro
     Ok(0)
 }
 
-fn handle_run(args: RunArgs, raw_args: &[String]) -> Result<i32, GiftwrapError> {
-    cli::validate_run_invocation(&args, raw_args)?;
-
+fn handle_run(args: RunArgs) -> Result<i32, GiftwrapError> {
     let logger = Logger::new(args.verbose);
     logger.event("probing required tools");
     let tools = tooling::probe_required(&logger)?;
@@ -199,7 +197,7 @@ fn handle_run(args: RunArgs, raw_args: &[String]) -> Result<i32, GiftwrapError> 
         })?;
     }
 
-    if args.setup_only {
+    if args.command.is_empty() {
         return Ok(0);
     }
 

@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use crate::errors::GiftwrapError;
 use crate::sqfs_cache::PullPolicy;
 
 #[derive(Debug, Parser)]
@@ -76,51 +75,10 @@ pub struct RunArgs {
     pub cache_dir: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = PullPolicyArg::Missing)]
     pub pull: PullPolicyArg,
-    #[arg(long)]
-    pub setup_only: bool,
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
 }
 
-pub struct ParsedCli {
-    pub cli: Cli,
-    pub raw_args: Vec<String>,
-}
-
-pub fn parse() -> ParsedCli {
-    let raw_args = std::env::args().collect::<Vec<_>>();
-    let cli = Cli::parse();
-    ParsedCli { cli, raw_args }
-}
-
-pub fn validate_run_invocation(
-    run_args: &RunArgs,
-    raw_args: &[String],
-) -> Result<(), GiftwrapError> {
-    if run_args.command.is_empty() || !run_has_delimiter(raw_args) {
-        return Err(GiftwrapError::usage(
-            "no command specified; use 'giftwrap run -- <command ...>'",
-        ));
-    }
-
-    Ok(())
-}
-
-pub fn run_has_delimiter(raw_args: &[String]) -> bool {
-    let mut saw_run = false;
-
-    for arg in raw_args.iter().skip(1) {
-        if !saw_run {
-            if arg == "run" {
-                saw_run = true;
-            }
-            continue;
-        }
-
-        if arg == "--" {
-            return true;
-        }
-    }
-
-    false
+pub fn parse() -> Cli {
+    Cli::parse()
 }

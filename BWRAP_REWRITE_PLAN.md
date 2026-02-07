@@ -32,7 +32,7 @@ Startup behavior:
 
 ## 3. CLI Specification
 Top-level commands:
-1. `giftwrap run [options] -- command ...`
+1. `giftwrap run [options] [command ...]`
 2. `giftwrap print-config`
 3. `giftwrap cache gc`
 4. `giftwrap version`
@@ -40,21 +40,21 @@ Top-level commands:
 `run` options:
 1. `--rebuild`
 Force rebuild even if cache exists.
-2. `--print`
+2. `--reset-overlay`
+Delete persistent runtime overlay state for this context before running.
+3. `--print`
 Print resolved build/run plan and exit without execution.
-3. `--verbose`
+4. `--verbose`
 Emit step-by-step logs to stderr.
-4. `--cache-dir <path>`
+5. `--cache-dir <path>`
 Override default cache dir (`~/.giftwrap/cache`).
-5. `--pull <policy>`
+6. `--pull <policy>`
 One of `missing`, `always`, `never`. Default `missing`.
-6. `--setup-only`
-Build/update cache only; do not run command.
 
-Command requirement:
-1. `giftwrap run` requires `-- command ...`.
-2. If no command is provided, exit with code `2` and print:
-`Error: no command specified; use 'giftwrap run -- <command ...>'`
+Command behavior:
+1. `--` delimiter is optional, and can still be used when needed to disambiguate command args.
+2. If no command is provided, `giftwrap run` performs setup/cache preparation and exits with code `0`.
+3. `--setup-only` is removed because it is now equivalent to omitting the command.
 
 Exit codes:
 1. `0` success.
@@ -70,16 +70,26 @@ OCI image reference (tag or digest).
 2. `setup_script` (string)
 Path relative to build root or absolute path.
 
+Optional keys:
+1. `env` (table of string key/value pairs)
+Merged into runtime environment after minimal host defaults.
+
 Validation rules:
 1. `image` must be non-empty.
 2. `setup_script` must be non-empty.
 3. `setup_script` must exist before build phase starts.
 4. Unknown keys are validation errors (strict schema).
+5. `env` keys must match `[A-Za-z_][A-Za-z0-9_]*`.
+6. `env` keys starting with `GW_` are reserved and rejected.
+7. `env` values must be strings.
 
 Example:
 ```toml
 image = "docker.io/library/debian:bookworm-slim"
 setup_script = "giftwrap/setup.sh"
+
+[env]
+PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ```
 
 ## 5. Build Root and Discovery
@@ -102,7 +112,6 @@ Hash algorithm:
 1. SHA-256 over canonical input stream.
 2. Input stream includes, in order:
 `giftwrap-v2\0`
-`config_bytes\0`
 `image_ref\0`
 `setup_script_sha256\0`
 `context_files_manifest\0`
@@ -110,13 +119,13 @@ Hash algorithm:
 sorted list of `<relative-path>\0<file-sha256>\0<mode>\0<symlink-target?>\0`.
 
 Manifest input files:
-1. `.giftwrap.toml`
-2. `setup_script`
-3. If `setup_script` is a symlink, hash symlink metadata and target path.
+1. `setup_script`
+2. If `setup_script` is a symlink, hash symlink metadata and target path.
 
 Rationale:
 1. Artifact naming stays `<ctx_sha>.sqfs` as required.
 2. Hash changes when any relevant input changes.
+3. Runtime-only config like `[env]` does not force image rebuilds.
 
 ## 7. Cache Layout and Metadata
 Default cache root:
@@ -128,6 +137,11 @@ Layout:
 3. `~/.giftwrap/cache/locks/<ctx_sha>.lock`
 4. `~/.giftwrap/cache/work/<ctx_sha>-<pid>-<timestamp>/`
 5. `~/.giftwrap/cache/mnt/<ctx_sha>/`
+
+Build-root runtime state:
+1. `<build_root>/.giftwrap/context` stores the latest computed `ctx_sha`.
+2. `<build_root>/.giftwrap/<ctx_sha>/upper` is persistent overlay upperdir.
+3. `<build_root>/.giftwrap/<ctx_sha>/work` is persistent overlay workdir.
 
 Metadata schema (`<ctx_sha>.json`):
 1. `schema_version` (u32, initial `1`)
@@ -172,23 +186,24 @@ Safety:
 Pipeline steps:
 1. Discover config and build root.
 2. Resolve inputs and compute `ctx_sha`.
-3. Check cache validity according to pull policy.
-4. If hit and not `--rebuild`, skip to runtime.
-5. Acquire per-context lock.
-6. Re-check cache (another process may have completed build).
-7. Create work dir.
-8. Pull image to OCI layout:
+3. Persist the latest context marker in `<build_root>/.giftwrap/context`.
+4. Check cache validity according to pull policy.
+5. If hit and not `--rebuild`, skip to runtime.
+6. Acquire per-context lock.
+7. Re-check cache (another process may have completed build).
+8. Create work dir.
+9. Pull image to OCI layout:
 `skopeo copy docker://<image_ref> oci:<work>/oci:base`
-9. Resolve image digest:
+10. Resolve image digest:
 `skopeo inspect docker://<image_ref>` and record digest.
-10. Unpack OCI:
+11. Unpack OCI:
 `umoci unpack --rootless --image <work>/oci:base <work>/bundle`
-11. Run setup phase (Section 10).
-12. Build squashfs:
+12. Run setup phase (Section 10).
+13. Build squashfs:
 `mksquashfs <work>/bundle/rootfs <cache>/<ctx_sha>.sqfs.tmp -comp zstd -xattrs -noappend`
-13. Write metadata json to `<cache>/<ctx_sha>.json.tmp`.
-14. Atomically rename both temp files to final artifact paths.
-15. Release lock and remove work dir.
+14. Write metadata json to `<cache>/<ctx_sha>.json.tmp`.
+15. Atomically rename both temp files to final artifact paths.
+16. Release lock and remove work dir.
 
 Failure behavior:
 1. Build failure keeps existing valid cache untouched.
@@ -229,12 +244,15 @@ Notes:
 ## 11. Runtime Execution Pipeline
 Steps:
 1. Ensure sqfs cache artifact exists (build if needed).
-2. Mount sqfs read-only:
+2. Build `RunSpec`, including persistent overlay paths under `<build_root>/.giftwrap/<ctx_sha>/`.
+3. If `--reset-overlay`, `--rebuild`, or `--pull always`, clear persistent overlay state first.
+4. Ensure overlay layout (`upper`, `work`) exists and is safe (non-symlink root).
+5. Mount sqfs read-only:
 `squashfuse <cache>/<ctx_sha>.sqfs <cache>/mnt/<ctx_sha>`
-3. Compose bwrap runtime argv.
-4. Spawn bwrap child with inherited stdin/stdout/stderr.
-5. Wait for child to exit, then unmount mountpoint.
-6. Exit with the child exit status.
+6. Compose bwrap runtime argv.
+7. Spawn bwrap child with inherited stdin/stdout/stderr.
+8. Wait for child to exit, then unmount mountpoint.
+9. Exit with the child exit status.
 
 Runtime bwrap defaults:
 1. `--die-with-parent`
@@ -248,7 +266,7 @@ Runtime bwrap defaults:
 9. `--uid <host_uid>`
 10. `--gid <host_gid>`
 11. `--overlay-src <cache>/mnt/<ctx_sha>`
-12. `--tmp-overlay /`
+12. `--overlay <build_root>/.giftwrap/<ctx_sha>/upper <build_root>/.giftwrap/<ctx_sha>/work /`
 13. `--proc /proc`
 14. `--dev /dev`
 15. `--bind <build_root> <build_root>`
@@ -258,11 +276,12 @@ Environment strategy:
 1. Start with `--clearenv`.
 2. Set minimal defaults:
 `HOME`, `USER`, `LOGNAME`, `PATH`, `TERM` (if present on host).
-3. No additional config-driven environment overrides in MVP.
+3. Apply `.giftwrap.toml` `[env]` overrides on top of host defaults.
 
 Command execution:
-1. `-- <argv...>` from CLI only.
-2. No internal agent process required in MVP.
+1. Runtime argv is taken from `[command ...]` CLI positionals (`--` delimiter optional).
+2. If command argv is empty, exit `0` after setup/cache work (no runtime spawn).
+3. No internal agent process required in MVP.
 
 UID/GID matching:
 1. Runtime always attempts host uid/gid inside sandbox.
@@ -367,15 +386,17 @@ No async runtime is required.
 1. Parse CLI.
 2. Discover/load config.
 3. Compute context hash and cache paths.
-4. Build or reuse sqfs.
+4. Write build-root context marker.
 5. Build run spec.
-6. Print or exec.
+6. Build or reuse sqfs.
+7. Print, empty-command setup exit, or exec.
 
 Core data structures:
 ```rust
 struct Config {
     image: String,
     setup_script: PathBuf,
+    env: BTreeMap<String, String>,
 }
 
 enum PullPolicy { Missing, Always, Never }
@@ -384,6 +405,7 @@ struct ContextHashResult {
     ctx_sha: String,
     manifest_sha256: String,
     manifest_entries: Vec<ManifestEntry>,
+    setup_script_sha256: String,
 }
 
 struct CachePaths {
@@ -414,6 +436,9 @@ struct RunSpec {
     build_root: PathBuf,
     workdir: PathBuf,
     mountpoint: PathBuf,
+    overlay_root: PathBuf,
+    overlay_upper: PathBuf,
+    overlay_work: PathBuf,
     env: BTreeMap<String, String>,
     argv: Vec<String>,
 }
@@ -429,18 +454,32 @@ run():
   cfg = config::load(discovered.path)
 
   ctx = context_hash::compute(discovered.root, cfg)
+  write_context_marker(discovered.root, ctx.ctx_sha)
   paths = sqfs_cache::resolve_paths(cache_dir(cli), ctx.ctx_sha)
+  run_spec = build_run_spec(
+    discovered.root,
+    ctx.ctx_sha,
+    cwd,
+    paths.mountpoint,
+    cfg.env,
+    cli.command_argv,
+  )
 
   if cli.print:
-    print_plan(cfg, ctx, paths)
+    print_plan(cfg, ctx, paths, run_spec)
     return 0
 
+  if cli.reset_overlay || cli.rebuild || pull_policy == Always:
+    runtime::reset_overlay(run_spec)
+
+  check_userns_support()
+
   if !cli.rebuild && sqfs_cache::is_valid(paths, pull_policy):
-    goto runtime
+    goto maybe_run
 
   sqfs_cache::with_lock(paths.lock, timeout):
     if !cli.rebuild && sqfs_cache::is_valid(paths, pull_policy):
-      goto runtime
+      goto maybe_run
     work = create_work_dir(paths.work_root)
     oci::pull_to_layout(cfg.image, work/oci)
     digest = oci::inspect_digest(cfg.image)
@@ -450,11 +489,10 @@ run():
     meta = build_metadata(cfg, ctx, digest, tools, pull_policy)
     sqfs_cache::write_atomically(paths, paths.sqfs.tmp, meta)
 
-runtime:
-  if cli.setup_only:
+maybe_run:
+  if cli.command_argv.is_empty():
     return 0
-  run_spec = build_run_spec(discovered.root, cwd, paths.mountpoint, cli.command_argv)
-  return runtime::bwrap::run_with_mount(paths.sqfs, paths.mountpoint, run_spec)
+  return runtime::run_with_mount(paths.sqfs, paths.mountpoint, run_spec)
 ```
 
 ## 17. Cache GC Specification
@@ -486,14 +524,15 @@ Optional optimizations after MVP:
 
 ## 19. Test Plan (Sufficient for Reimplementation)
 Unit tests:
-1. CLI parse matrix for all options and delimiters, including error on missing `-- command ...`.
+1. CLI parse matrix for all options and delimiters, including setup-only behavior when command is omitted.
 2. Config validation success/failure cases.
 3. Discovery upward search behavior.
 4. Context hash determinism and change sensitivity.
 5. Cache metadata parse and validity rules.
 6. Lock timeout and lock reentry behavior.
 7. Build command composition (`skopeo`, `umoci`, `mksquashfs`).
-8. Runtime bwrap argv composition.
+8. Runtime bwrap argv composition (persistent overlay args).
+9. Overlay reset and overlay-layout safety behavior.
 
 Manual integration tests (developer machine only):
 1. Cold run from uncached image.
@@ -541,7 +580,7 @@ Definition of done:
 ## 21. Migration Note
 This rewrite is intentionally breaking.
 Carry a short migration doc:
-1. legacy flags removed
+1. legacy flags removed (including `--setup-only`)
 2. new `.giftwrap.toml` schema
 3. setup script model replacing Containerfile semantics
-4. new cache and runtime behavior
+4. new cache and runtime behavior (including persistent per-context runtime overlays)

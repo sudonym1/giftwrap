@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use giftwrap::cli::{self, CacheCommands, Cli, Commands, PullPolicyArg};
+use giftwrap::cli::{CacheCommands, Cli, Commands, PullPolicyArg};
 
 #[test]
 fn parses_run_with_all_flags() {
@@ -14,8 +14,6 @@ fn parses_run_with_all_flags() {
         "/tmp/cache",
         "--pull",
         "always",
-        "--setup-only",
-        "--",
         "echo",
         "hello",
     ])
@@ -28,7 +26,6 @@ fn parses_run_with_all_flags() {
     assert!(run.rebuild);
     assert!(run.print);
     assert!(run.verbose);
-    assert!(run.setup_only);
     assert_eq!(
         run.cache_dir.as_deref(),
         Some(std::path::Path::new("/tmp/cache"))
@@ -38,47 +35,26 @@ fn parses_run_with_all_flags() {
 }
 
 #[test]
-fn rejects_missing_command() {
-    let cli =
-        Cli::try_parse_from(["giftwrap", "run", "--setup-only"]).expect("cli parse should succeed");
+fn accepts_missing_command() {
+    let cli = Cli::try_parse_from(["giftwrap", "run"]).expect("cli parse should succeed");
 
     let Commands::Run(run) = cli.command else {
         panic!("expected run command");
     };
 
-    let raw = vec![
-        "giftwrap".to_string(),
-        "run".to_string(),
-        "--setup-only".to_string(),
-    ];
-    let err = cli::validate_run_invocation(&run, &raw).expect_err("missing command should fail");
-    assert_eq!(
-        err.to_string(),
-        "no command specified; use 'giftwrap run -- <command ...>'"
-    );
+    assert!(run.command.is_empty());
 }
 
 #[test]
-fn rejects_missing_double_dash() {
-    let cli = Cli::try_parse_from(["giftwrap", "run", "echo", "hello"])
+fn still_parses_with_double_dash_delimiter() {
+    let cli = Cli::try_parse_from(["giftwrap", "run", "--", "echo", "hello"])
         .expect("cli parse should succeed");
 
     let Commands::Run(run) = cli.command else {
         panic!("expected run command");
     };
 
-    let raw = vec![
-        "giftwrap".to_string(),
-        "run".to_string(),
-        "echo".to_string(),
-        "hello".to_string(),
-    ];
-    let err = cli::validate_run_invocation(&run, &raw)
-        .expect_err("missing command delimiter should fail");
-    assert_eq!(
-        err.to_string(),
-        "no command specified; use 'giftwrap run -- <command ...>'"
-    );
+    assert_eq!(run.command, vec!["echo", "hello"]);
 }
 
 #[test]
